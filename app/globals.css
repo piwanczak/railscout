@@ -408,7 +408,7 @@ summary:focus-visible {
 
 .detail-fields {
   margin-top: 17px;
-  grid-template-columns: 1.1fr 1fr 0.85fr;
+  grid-template-columns: 1.1fr 1fr 0.85fr 0.75fr;
   gap: 12px;
 }
 
@@ -1091,6 +1091,25 @@ summary:focus-visible {
   text-align: right;
 }
 
+.seat-chips {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.seat-chips span {
+  padding: 3px 6px;
+  border: 1px solid rgba(24, 55, 45, 0.18);
+  border-radius: 999px;
+  background: var(--mint);
+  color: #17613f;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.58rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
 .details-footer {
   padding: 15px 24px;
   display: flex;
@@ -1381,6 +1400,10 @@ footer a {
     grid-column: 2;
     justify-items: start;
     text-align: left;
+  }
+
+  .seat-chips {
+    justify-content: flex-start;
   }
 
   .details-footer {

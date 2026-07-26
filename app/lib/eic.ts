@@ -59,6 +59,10 @@ export function formatEicDateTime(value: string) {
   return warsawParts(value)?.dateTime ?? "";
 }
 
+export function formatEicCompactDateTime(value: string) {
+  return (warsawParts(value)?.dateTime ?? "").replace(/[-:T]/g, "").slice(0, 12);
+}
+
 export function buildEicBookingUrl(input: {
   originStationId: number;
   destinationStationId: number;

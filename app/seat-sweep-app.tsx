@@ -39,7 +39,12 @@ type AvailabilitySegment = {
   to: number;
   timeFrom: string;
   timeTo: string;
-  occupancyPercent: number;
+  freeSeats: number;
+  seats: Array<{
+    wagon: string;
+    seat: string;
+    label: string;
+  }>;
 };
 
 type CheckState = {
@@ -51,7 +56,7 @@ type CheckState = {
     | "unknown"
     | "error";
   segments?: AvailabilitySegment[];
-  peakOccupancy?: number | null;
+  minimumFreeSeats?: number | null;
   checkedSegments?: number;
   unknownSegments?: number;
   totalSegments?: number;
@@ -67,7 +72,7 @@ type ScheduleSource = {
 };
 
 type SearchPhase = "idle" | "loading-trains" | "checking" | "done";
-type SortKey = "recommended" | "departure" | "occupancy" | "switches";
+type SortKey = "recommended" | "departure" | "seats" | "switches";
 
 const PARALLEL_CHECKS = 4;
 
@@ -127,8 +132,8 @@ function seatSwitches(check?: CheckState) {
   return Math.max(0, check.segments.length - 1);
 }
 
-function peakOccupancy(check?: CheckState) {
-  return check?.peakOccupancy ?? Number.POSITIVE_INFINITY;
+function availableSeatCount(check?: CheckState) {
+  return check?.minimumFreeSeats ?? -1;
 }
 
 function statusRank(check?: CheckState) {
@@ -148,11 +153,10 @@ function pluralConnections(count: number) {
   return "połączeń";
 }
 
-function availabilityLabel(occupancyPercent: number) {
-  if (occupancyPercent <= 40) return "Dużo miejsc";
-  if (occupancyPercent <= 80) return "Miejsca dostępne";
-  if (occupancyPercent < 100) return "Ostatnie miejsca";
-  return "Brak miejsc";
+function freeSeatLabel(count: number) {
+  if (count === 1) return "1 wolne miejsce";
+  if (count >= 2 && count <= 4) return `${count} wolne miejsca`;
+  return `${count} wolnych miejsc`;
 }
 
 export function SeatSweepApp() {
@@ -162,6 +166,7 @@ export function SeatSweepApp() {
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [ticketClass, setTicketClass] = useState<1 | 2>(2);
+  const [numberOfPassengers, setNumberOfPassengers] = useState(1);
   const [bike, setBike] = useState(false);
   const [phase, setPhase] = useState<SearchPhase>("idle");
   const [trains, setTrains] = useState<Train[]>([]);
@@ -243,14 +248,14 @@ export function SeatSweepApp() {
         return Date.parse(left.departure) - Date.parse(right.departure);
       }
 
-      if (sortKey === "occupancy") {
-        return peakOccupancy(leftCheck) - peakOccupancy(rightCheck);
+      if (sortKey === "seats") {
+        return availableSeatCount(rightCheck) - availableSeatCount(leftCheck);
       }
 
       if (sortKey === "switches") {
         return (
           seatSwitches(leftCheck) - seatSwitches(rightCheck) ||
-          peakOccupancy(leftCheck) - peakOccupancy(rightCheck) ||
+          availableSeatCount(rightCheck) - availableSeatCount(leftCheck) ||
           Date.parse(left.departure) - Date.parse(right.departure)
         );
       }
@@ -258,7 +263,7 @@ export function SeatSweepApp() {
       return (
         statusRank(leftCheck) - statusRank(rightCheck) ||
         seatSwitches(leftCheck) - seatSwitches(rightCheck) ||
-        peakOccupancy(leftCheck) - peakOccupancy(rightCheck) ||
+        availableSeatCount(rightCheck) - availableSeatCount(leftCheck) ||
         Date.parse(left.departure) - Date.parse(right.departure)
       );
     });
@@ -302,6 +307,7 @@ export function SeatSweepApp() {
               stationStops: train.stationStops,
               startDateTime: train.departure,
               arrivalDateTime: train.arrival,
+              numberOfPassengers,
               bike,
               ticketClass,
             }),
@@ -310,7 +316,7 @@ export function SeatSweepApp() {
           const result = (await response.json()) as {
             status?: "available" | "unavailable" | "unknown";
             segments?: AvailabilitySegment[];
-            peakOccupancy?: number | null;
+            minimumFreeSeats?: number | null;
             checkedSegments?: number;
             unknownSegments?: number;
             totalSegments?: number;
@@ -328,7 +334,7 @@ export function SeatSweepApp() {
             updateCheck(train.uuid, {
               status: "available",
               segments: result.segments ?? [],
-              peakOccupancy: result.peakOccupancy,
+              minimumFreeSeats: result.minimumFreeSeats,
               checkedSegments: result.checkedSegments,
               unknownSegments: result.unknownSegments,
               totalSegments: result.totalSegments,
@@ -503,13 +509,13 @@ export function SeatSweepApp() {
             <em>Wszystkie kombinacje.</em>
           </h1>
           <p className="hero-lede">
-            RailScout sprawdza każdy widoczny pociąg i każdy możliwy podział
-            trasy, a potem pokazuje wariant z najmniejszą liczbą zmian.
+            RailScout sprawdza dokładne miejsca w każdym widocznym pociągu.
+            Gdy pełna trasa jest zajęta, przelicza każdy możliwy podział.
           </p>
           <div className="promise-row" aria-label="Zakres wyszukiwania">
             <span>Każdy widoczny pociąg</span>
-            <span>Każdy możliwy podział</span>
-            <span>Jeden czytelny ranking</span>
+            <span>Numery wagonów i miejsc</span>
+            <span>Wszystkie potrzebne podziały</span>
           </div>
         </div>
 
@@ -619,6 +625,21 @@ export function SeatSweepApp() {
                 <option value="1">1 klasa</option>
               </select>
             </label>
+            <label className="field">
+              <span>Podróżni</span>
+              <select
+                value={numberOfPassengers}
+                onChange={(event) =>
+                  setNumberOfPassengers(Number(event.target.value))
+                }
+              >
+                {[1, 2, 3, 4, 5, 6].map((count) => (
+                  <option key={count} value={count}>
+                    {count}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className="search-actions">
@@ -721,7 +742,7 @@ export function SeatSweepApp() {
                 [
                   ["recommended", "Najlepsze"],
                   ["departure", "Najwcześniej"],
-                  ["occupancy", "Najwięcej miejsc"],
+                  ["seats", "Najwięcej wolnych"],
                   ["switches", "Najmniej zmian"],
                 ] as Array<[SortKey, string]>
               ).map(([value, label]) => (
@@ -759,6 +780,7 @@ export function SeatSweepApp() {
                 rank={index + 1}
                 stationById={stationById}
                 ticketClass={ticketClass}
+                numberOfPassengers={numberOfPassengers}
               />
             ))}
           </div>
@@ -811,17 +833,20 @@ function TrainCard({
   rank,
   stationById,
   ticketClass,
+  numberOfPassengers,
 }: {
   train: Train;
   check: CheckState;
   rank: number;
   stationById: Map<number, Station>;
   ticketClass: 1 | 2;
+  numberOfPassengers: number;
 }) {
   const switches = seatSwitches(check);
   const isAvailable = check.status === "available";
   const isBest = rank === 1 && isAvailable;
-  const occupancy = Math.round(check.peakOccupancy ?? 0);
+  const freeSeats = check.minimumFreeSeats ?? 0;
+  const firstSeat = check.segments?.[0]?.seats[0];
   const routeLabel =
     switches === 0
       ? "Bez podziału trasy"
@@ -882,12 +907,15 @@ function TrainCard({
           {isAvailable && (
             <>
               <span className="status-badge available">
-                {availabilityLabel(occupancy)}
+                {freeSeatLabel(freeSeats)}
               </span>
-              <strong className="result-price">do {occupancy}% zajętości</strong>
+              <strong className="result-price">
+                {numberOfPassengers === 1 && switches === 0 && firstSeat
+                  ? `wagon ${firstSeat.wagon} · miejsce ${firstSeat.seat}`
+                  : `miejsca dla ${numberOfPassengers} os.`}
+              </strong>
               <small>
-                {ticketClass} klasa · {check.checkedSegments ?? 0}/
-                {check.totalSegments ?? 0} odcinków sprawdzonych
+                {ticketClass} klasa · mapa miejsc e-IC
               </small>
             </>
           )}
@@ -913,7 +941,7 @@ function TrainCard({
         <details className="seat-details" open={isBest}>
           <summary>
             <span>{routeLabel}</span>
-            <span>Zobacz podział trasy</span>
+            <span>Zobacz miejsca</span>
           </summary>
           <div className="passenger-list">
             <section className="passenger-route">
@@ -933,8 +961,14 @@ function TrainCard({
                         </small>
                       </div>
                       <div className="segment-seat">
-                        <strong>{availabilityLabel(segment.occupancyPercent)}</strong>
-                        <small>{Math.round(segment.occupancyPercent)}% zajętości</small>
+                        <strong>{freeSeatLabel(segment.freeSeats)}</strong>
+                        <div className="seat-chips" aria-label="Wolne miejsca">
+                          {segment.seats.map((seat) => (
+                            <span key={`${seat.wagon}-${seat.seat}`}>
+                              W{seat.wagon} · {seat.seat}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   );
@@ -943,7 +977,10 @@ function TrainCard({
             </section>
           </div>
           <div className="details-footer">
-            <span>Dostępność może zmienić się przed finalizacją zakupu.</span>
+            <span>
+              Miejsca były wolne w chwili sprawdzenia. e-IC potwierdzi przydział
+              podczas zakupu.
+            </span>
             {train.bookingUrl && (
               <a href={train.bookingUrl} target="_blank" rel="noreferrer">
                 Kup ten pociąg w e-IC →

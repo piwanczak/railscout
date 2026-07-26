@@ -35,11 +35,11 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase,
     title: "RailScout — dostępność miejsc we wszystkich połączeniach",
     description:
-      "Sprawdź każdy widoczny pociąg PKP Intercity i wszystkie możliwe podziały trasy w jednym wyszukaniu.",
+      "Sprawdź dokładne numery wolnych miejsc w każdym widocznym pociągu PKP Intercity i wszystkie potrzebne podziały trasy.",
     openGraph: {
       title: "Jedno wyszukanie. Wszystkie kombinacje.",
       description:
-        "RailScout porównuje dostępność miejsc na całej trasie i na każdym możliwym podziale.",
+        "RailScout pokazuje dokładne numery wolnych miejsc na całej trasie i wszystkich potrzebnych podziałach.",
       type: "website",
       locale: "pl_PL",
       images: [
@@ -55,7 +55,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title: "Jedno wyszukanie. Wszystkie kombinacje.",
       description:
-        "Dostępność miejsc na całej trasie i na każdym możliwym podziale.",
+        "Dokładne numery wolnych miejsc na całej trasie i potrzebnych podziałach.",
       images: [socialImage],
     },
   };

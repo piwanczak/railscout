@@ -1,9 +1,9 @@
 # RailScout
 
 RailScout is a private-first PKP Intercity seat-availability search. One query
-checks every visible direct train and every station-pair combination, then
-selects the complete route with the fewest ticket splits and the lowest peak
-occupancy.
+checks every visible direct train against the carrier's live wagon maps. When a
+through seat is unavailable, it evaluates every contiguous station-pair
+combination and selects the complete route with the fewest ticket splits.
 
 ## Run locally
 
@@ -20,19 +20,21 @@ the PKP PLK Open Railway Data API.
 
 ## Seat availability
 
-RailScout uses the availability signal exposed by the current e-IC sales
-interface. For each train it:
+RailScout uses the read-only GRM composition and wagon-map endpoints exposed by
+the current e-IC sales interface. For each train it:
 
-1. Generates every directed station pair on the requested route.
-2. Checks the selected class or bicycle-place inventory with bounded
-   concurrency.
-3. Stops the sweep immediately when the carrier reports a service outage or
-   rate limit.
-4. Builds the best complete route from segments below 100% occupancy.
+1. Reads the train composition and the selected class's wagon maps.
+2. Extracts the exact wagon and seat numbers currently marked free by e-IC.
+3. If the through journey is full, reads every adjacent leg with bounded
+   concurrency and intersects the same seat IDs across legs. This derives every
+   possible contiguous split while avoiding a quadratic request sweep.
+4. Builds the complete route with the fewest ticket splits, preferring plans
+   with more spare seats.
 
-Responses are cached briefly to avoid repeating identical checks. Results use
-the same occupancy bands as e-IC: high availability up to 40%, moderate up to
-80%, low below 100%, and unavailable at 100%.
+Responses are cached briefly to avoid repeating identical checks. Seat numbers
+are informational and are not held; e-IC confirms the final assignment during
+purchase. `EIC_GRM_API_URL` can point tests or local development at a compatible
+mock service and defaults to the official Intercity gateway.
 
 The e-IC station-code mapping in `app/data/eic-stations.json` is generated from
 the carrier's station catalogue. Purchase buttons open a route-and-time search

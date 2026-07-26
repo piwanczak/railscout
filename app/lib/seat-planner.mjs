@@ -21,12 +21,13 @@ export function everySegment(stationIds) {
  * @property {number} to
  * @property {string} timeFrom
  * @property {string} timeTo
- * @property {number} occupancyPercent
+ * @property {number} freeSeats
+ * @property {Array<{wagon: string, seat: string, label: string}>} seats
  */
 
 /**
  * Pick a complete route through available segments. The fewest ticket splits
- * wins; lower peak occupancy and then lower average occupancy break ties.
+ * wins; more spare seats on the weakest segment and then in total break ties.
  *
  * @param {{stationIds: number[], segments: AvailabilitySegment[]}} input
  * @returns {AvailabilitySegment[] | null}
@@ -40,15 +41,18 @@ export function findAvailabilityPlan(input) {
       from !== undefined &&
       to !== undefined &&
       from < to &&
-      Number.isFinite(segment.occupancyPercent) &&
-      segment.occupancyPercent >= 0 &&
-      segment.occupancyPercent < 100
+      Number.isFinite(segment.freeSeats) &&
+      segment.freeSeats > 0
     );
   });
 
-  /** @type {Array<{segments: AvailabilitySegment[], peak: number, sum: number} | null>} */
+  /** @type {Array<{segments: AvailabilitySegment[], minimum: number, sum: number} | null>} */
   const bestAt = Array.from({ length: input.stationIds.length }, () => null);
-  bestAt[0] = { segments: [], peak: 0, sum: 0 };
+  bestAt[0] = {
+    segments: [],
+    minimum: Number.POSITIVE_INFINITY,
+    sum: 0,
+  };
 
   for (let fromIndex = 0; fromIndex < input.stationIds.length - 1; fromIndex += 1) {
     const current = bestAt[fromIndex];
@@ -61,21 +65,17 @@ export function findAvailabilityPlan(input) {
 
       const candidate = {
         segments: [...current.segments, segment],
-        peak: Math.max(current.peak, segment.occupancyPercent),
-        sum: current.sum + segment.occupancyPercent,
+        minimum: Math.min(current.minimum, segment.freeSeats),
+        sum: current.sum + segment.freeSeats,
       };
       const existing = bestAt[toIndex];
-      const candidateAverage = candidate.sum / candidate.segments.length;
-      const existingAverage = existing
-        ? existing.sum / existing.segments.length
-        : Number.POSITIVE_INFINITY;
 
       if (
         !existing ||
         candidate.segments.length < existing.segments.length ||
         (candidate.segments.length === existing.segments.length &&
-          (candidate.peak < existing.peak ||
-            (candidate.peak === existing.peak && candidateAverage < existingAverage)))
+          (candidate.minimum > existing.minimum ||
+            (candidate.minimum === existing.minimum && candidate.sum > existing.sum)))
       ) {
         bestAt[toIndex] = candidate;
       }

@@ -42,6 +42,7 @@ export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as AvailabilityPayload;
     const ticketClass = payload.ticketClass === 1 ? 1 : 2;
+    const numberOfPassengers = payload.numberOfPassengers ?? 1;
 
     if (
       typeof payload.uuid !== "string" ||
@@ -52,7 +53,10 @@ export async function POST(request: Request) {
       typeof payload.startDateTime !== "string" ||
       Number.isNaN(Date.parse(payload.startDateTime)) ||
       typeof payload.arrivalDateTime !== "string" ||
-      Number.isNaN(Date.parse(payload.arrivalDateTime))
+      Number.isNaN(Date.parse(payload.arrivalDateTime)) ||
+      !Number.isInteger(numberOfPassengers) ||
+      numberOfPassengers < 1 ||
+      numberOfPassengers > 6
     ) {
       return Response.json(
         { error: "Nieprawidłowe dane pociągu." },
@@ -69,6 +73,7 @@ export async function POST(request: Request) {
         arrival: payload.arrivalDateTime,
       },
       stationStops: payload.stationStops,
+      numberOfPassengers,
       ticketClass,
       bike: Boolean(payload.bike),
     });
