@@ -74,6 +74,26 @@ const mockGrmServer = createServer((request, response) => {
     return;
   }
 
+  if (
+    request.url?.includes("/IC/4444/") &&
+    request.url.includes("/sklad/wbnet/")
+  ) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        ...composition,
+        wagony: [3, 4],
+        klasa2: [3, 4],
+        wagonyUdogodnienia: { 3: ["302"], 4: ["302"] },
+        wagonySchemat: {
+          3: "2061,WITHOUT_COMPARTMENTS",
+          4: "2061,WITHOUT_COMPARTMENTS",
+        },
+      }),
+    );
+    return;
+  }
+
   if (request.url?.includes("/sklad/wbnet/")) {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(composition));
@@ -88,7 +108,8 @@ const mockGrmServer = createServer((request, response) => {
     }
     const isDirectWarsawKrakow = request.url.endsWith("/5100136/5100051");
     const isReferenceTrain = request.url.includes("/IC/5330/");
-    const places = isReferenceTrain
+    const isSingleSeatTrain = request.url.includes("/IC/4444/");
+    const places = isReferenceTrain || isSingleSeatTrain
       ? [
           { seat: "104", status: "1" },
           { seat: "108", status: "3" },
@@ -503,6 +524,37 @@ test("availability API returns the exact reference seat from official-style GRM 
         request.referer === "https://ebilet.intercity.pl/" &&
         request.userAgent?.includes("Chrome/150.0.0.0") &&
         request.secFetchSite === "same-site",
+    ),
+  );
+});
+
+test("a one-passenger lookup stops after the first wagon with a free seat", async () => {
+  mockGrmRequests.length = 0;
+  const response = await appFetch("/api/availability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      category: "IC",
+      trainNumber: "4444",
+      stationStops: [
+        { id: 33605, arrival: "2026-07-27T10:08:00+02:00", departure: "2026-07-27T10:08:00+02:00" },
+        { id: 80416, arrival: "2026-07-27T14:39:00+02:00", departure: "2026-07-27T14:39:00+02:00" },
+      ],
+      numberOfPassengers: 1,
+      ticketClass: 2,
+      bike: false,
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.status, "available");
+  assert.equal(payload.minimumFreeSeats, 1);
+  assert.equal(mockGrmRequests.length, 2);
+  assert.match(mockGrmRequests[1].url, /\/wagon\/svg\/wbnet\/IC\/4444\/3\//);
+  assert.ok(
+    mockGrmRequests.every(
+      (request) => !request.url?.includes("/wagon/svg/wbnet/IC/4444/4/"),
     ),
   );
 });

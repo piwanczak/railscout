@@ -499,41 +499,53 @@ async function lookupInventory(
   }
 
   let incompleteMaps = false;
+  const fetchWagonSeats = async (wagon: string) => {
+    const scheme = schemes[wagon];
+    if (!scheme) {
+      incompleteMaps = true;
+      return [] as ExactSeat[];
+    }
+
+    const svg = await fetchGrm(
+      wagonUrl({
+        category: input.train.category,
+        trainNumber: input.train.number,
+        wagon,
+        scheme,
+        from,
+        to,
+        fromCode: fromCodes.availabilityCode,
+        toCode: toCodes.availabilityCode,
+      }),
+      "text",
+      signal,
+    );
+    const parsed = parseGrmSeatMap(svg, {
+      wagon,
+      ticketClass: input.ticketClass,
+      bike: input.bike,
+    });
+    if (!parsed || parsed.eligiblePlaces === 0) {
+      incompleteMaps = true;
+      return [] as ExactSeat[];
+    }
+    return parsed.seats as ExactSeat[];
+  };
+
+  if (input.numberOfPassengers === 1) {
+    for (const wagon of relevantWagons) {
+      const [firstSeat] = sortExactSeats(await fetchWagonSeats(wagon));
+      if (firstSeat) return { state: "available", seats: [firstSeat] };
+    }
+    return incompleteMaps
+      ? { state: "unknown", seats: [] }
+      : { state: "unavailable", seats: [] };
+  }
+
   const mapResults = await mapLimit(
     relevantWagons,
     MAP_CONCURRENCY,
-    async (wagon) => {
-      const scheme = schemes[wagon];
-      if (!scheme) {
-        incompleteMaps = true;
-        return [] as ExactSeat[];
-      }
-
-      const svg = await fetchGrm(
-        wagonUrl({
-          category: input.train.category,
-          trainNumber: input.train.number,
-          wagon,
-          scheme,
-          from,
-          to,
-          fromCode: fromCodes.availabilityCode,
-          toCode: toCodes.availabilityCode,
-        }),
-        "text",
-        signal,
-      );
-      const parsed = parseGrmSeatMap(svg, {
-        wagon,
-        ticketClass: input.ticketClass,
-        bike: input.bike,
-      });
-      if (!parsed || parsed.eligiblePlaces === 0) {
-        incompleteMaps = true;
-        return [] as ExactSeat[];
-      }
-      return parsed.seats as ExactSeat[];
-    },
+    fetchWagonSeats,
   );
 
   const seats = sortExactSeats(mapResults.flat()) as ExactSeat[];
