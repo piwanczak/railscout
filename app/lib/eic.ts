@@ -71,7 +71,15 @@ export function buildEicBookingUrl(input: {
   const origin = getEicStationCodes(input.originStationId);
   const destination = getEicStationCodes(input.destinationStationId);
   const departure = new Date(input.departure);
-  if (!origin || !destination || Number.isNaN(departure.getTime())) return null;
+  if (
+    !origin ||
+    !destination ||
+    origin.searchCode <= 0 ||
+    destination.searchCode <= 0 ||
+    Number.isNaN(departure.getTime())
+  ) {
+    return null;
+  }
 
   // Starting one minute before departure makes the selected train the first result.
   const searchStart = warsawParts(departure.getTime() - 60_000);

@@ -45,8 +45,8 @@ export async function generateMetadata(): Promise<Metadata> {
       images: [
         {
           url: socialImage,
-          width: 1728,
-          height: 912,
+          width: 1200,
+          height: 630,
           alt: "RailScout — jedno wyszukanie, wszystkie kombinacje",
         },
       ],
@@ -57,6 +57,11 @@ export async function generateMetadata(): Promise<Metadata> {
       description:
         "Dokładne numery wolnych miejsc na całej trasie i potrzebnych podziałach.",
       images: [socialImage],
+    },
+    robots: {
+      index: false,
+      follow: false,
+      noarchive: true,
     },
   };
 }

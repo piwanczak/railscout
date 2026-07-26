@@ -19,6 +19,8 @@ export function everySegment(stationIds) {
  * @typedef {object} AvailabilitySegment
  * @property {number} from
  * @property {number} to
+ * @property {number} [fromIndex]
+ * @property {number} [toIndex]
  * @property {string} timeFrom
  * @property {string} timeTo
  * @property {number} freeSeats
@@ -33,17 +35,26 @@ export function everySegment(stationIds) {
  * @returns {AvailabilitySegment[] | null}
  */
 export function findAvailabilityPlan(input) {
-  const stationIndex = new Map(input.stationIds.map((id, index) => [id, index]));
-  const segments = input.segments.filter((segment) => {
-    const from = stationIndex.get(Number(segment.from));
-    const to = stationIndex.get(Number(segment.to));
-    return (
-      from !== undefined &&
-      to !== undefined &&
-      from < to &&
+  const segments = input.segments.flatMap((segment) => {
+    let fromIndex = Number(segment.fromIndex);
+    let toIndex = Number(segment.toIndex);
+
+    if (
+      !Number.isInteger(fromIndex) ||
+      !Number.isInteger(toIndex) ||
+      input.stationIds[fromIndex] !== Number(segment.from) ||
+      input.stationIds[toIndex] !== Number(segment.to)
+    ) {
+      fromIndex = input.stationIds.indexOf(Number(segment.from));
+      toIndex = input.stationIds.indexOf(Number(segment.to), fromIndex + 1);
+    }
+
+    return fromIndex >= 0 &&
+      toIndex > fromIndex &&
       Number.isFinite(segment.freeSeats) &&
       segment.freeSeats > 0
-    );
+      ? [{ segment, fromIndex, toIndex }]
+      : [];
   });
 
   /** @type {Array<{segments: AvailabilitySegment[], minimum: number, sum: number} | null>} */
@@ -58,10 +69,9 @@ export function findAvailabilityPlan(input) {
     const current = bestAt[fromIndex];
     if (!current) continue;
 
-    for (const segment of segments) {
-      if (stationIndex.get(Number(segment.from)) !== fromIndex) continue;
-      const toIndex = stationIndex.get(Number(segment.to));
-      if (toIndex === undefined) continue;
+    for (const candidateSegment of segments) {
+      if (candidateSegment.fromIndex !== fromIndex) continue;
+      const { segment, toIndex } = candidateSegment;
 
       const candidate = {
         segments: [...current.segments, segment],

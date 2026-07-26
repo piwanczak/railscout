@@ -1,7 +1,11 @@
 import { fetchSeatAvailability } from "@/app/lib/seat-provider";
+import {
+  HttpInputError,
+  jsonResponse,
+  readJsonBody,
+} from "@/app/lib/http";
 
 type AvailabilityPayload = {
-  uuid?: string;
   category?: string;
   trainNumber?: string;
   stationStops?: Array<{
@@ -9,8 +13,6 @@ type AvailabilityPayload = {
     arrival?: string;
     departure?: string;
   }>;
-  startDateTime?: string;
-  arrivalDateTime?: string;
   numberOfPassengers?: number;
   bike?: boolean;
   ticketClass?: 1 | 2;
@@ -19,46 +21,56 @@ type AvailabilityPayload = {
 function validStationPath(
   value: AvailabilityPayload["stationStops"],
 ): value is Array<{ id: number; arrival: string; departure: string }> {
-  return (
-    Array.isArray(value) &&
-    value.length >= 2 &&
-    value.length <= 80 &&
-    value.every(
-      (stop) =>
-        Boolean(stop) &&
-        typeof stop === "object" &&
-        Number.isInteger(stop.id) &&
-        Number(stop.id) > 0 &&
-        typeof stop.arrival === "string" &&
-        !Number.isNaN(Date.parse(stop.arrival)) &&
-        typeof stop.departure === "string" &&
-        !Number.isNaN(Date.parse(stop.departure)),
-    ) &&
-    new Set(value.map((stop) => stop.id)).size === value.length
-  );
+  if (!Array.isArray(value) || value.length < 2 || value.length > 80) {
+    return false;
+  }
+
+  let previousDeparture = Number.NEGATIVE_INFINITY;
+  for (const stop of value) {
+    if (
+      !stop ||
+      typeof stop !== "object" ||
+      !Number.isInteger(stop.id) ||
+      Number(stop.id) <= 0 ||
+      typeof stop.arrival !== "string" ||
+      typeof stop.departure !== "string"
+    ) {
+      return false;
+    }
+
+    const arrival = Date.parse(stop.arrival);
+    const departure = Date.parse(stop.departure);
+    if (
+      Number.isNaN(arrival) ||
+      Number.isNaN(departure) ||
+      arrival > departure ||
+      arrival < previousDeparture
+    ) {
+      return false;
+    }
+    previousDeparture = departure;
+  }
+
+  return true;
 }
 
 export async function POST(request: Request) {
   try {
-    const payload = (await request.json()) as AvailabilityPayload;
+    const payload = await readJsonBody<AvailabilityPayload>(request);
     const ticketClass = payload.ticketClass === 1 ? 1 : 2;
     const numberOfPassengers = payload.numberOfPassengers ?? 1;
 
     if (
-      typeof payload.uuid !== "string" ||
-      payload.uuid.length < 8 ||
       typeof payload.category !== "string" ||
+      !/^[A-Za-z/\s-]{1,24}$/.test(payload.category) ||
       typeof payload.trainNumber !== "string" ||
+      !/^[0-9/\s-]{1,24}$/.test(payload.trainNumber) ||
       !validStationPath(payload.stationStops) ||
-      typeof payload.startDateTime !== "string" ||
-      Number.isNaN(Date.parse(payload.startDateTime)) ||
-      typeof payload.arrivalDateTime !== "string" ||
-      Number.isNaN(Date.parse(payload.arrivalDateTime)) ||
       !Number.isInteger(numberOfPassengers) ||
       numberOfPassengers < 1 ||
       numberOfPassengers > 6
     ) {
-      return Response.json(
+      return jsonResponse(
         { error: "Nieprawidłowe dane pociągu." },
         { status: 400 },
       );
@@ -66,21 +78,21 @@ export async function POST(request: Request) {
 
     const result = await fetchSeatAvailability({
       train: {
-        id: payload.uuid,
         number: payload.trainNumber,
         category: payload.category,
-        departure: payload.startDateTime,
-        arrival: payload.arrivalDateTime,
       },
       stationStops: payload.stationStops,
       numberOfPassengers,
       ticketClass,
       bike: Boolean(payload.bike),
     });
-    return Response.json(result);
+    return jsonResponse(result);
   } catch (error) {
+    if (error instanceof HttpInputError) {
+      return jsonResponse({ error: error.message }, { status: error.status });
+    }
     console.error("Seat availability lookup failed", error);
-    return Response.json(
+    return jsonResponse(
       { error: "Nie udało się sprawdzić dostępności miejsc." },
       { status: 502 },
     );

@@ -1,15 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-
-const feedDirectory = process.argv[2];
-
-if (!feedDirectory) {
-  console.error("Usage: node scripts/import-open-gtfs.mjs <extracted-gtfs-directory>");
-  process.exitCode = 1;
-} else {
-  await importFeed(path.resolve(feedDirectory));
-}
+import { fileURLToPath } from "node:url";
 
 function parseCsvLine(line) {
   const values = [];
@@ -59,17 +51,7 @@ function toIsoDate(value) {
   return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
 }
 
-function slugify(value) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase("pl")
-    .replace(/ł/g, "l")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-async function importFeed(directory) {
+export async function importFeed(directory, options = {}) {
   const [routes, trips, stops, calendarDates, attributions] = await Promise.all([
     readCsv(path.join(directory, "routes.txt")),
     readCsv(path.join(directory, "trips.txt")),
@@ -136,7 +118,7 @@ async function importFeed(directory) {
     .flatMap((id) => {
       const name = stationNames.get(id);
       return name
-        ? [{ id, name, slug: slugify(name), city: name }]
+        ? [{ id, name }]
         : [];
     })
     .sort((left, right) => left.name.localeCompare(right.name, "pl"));
@@ -155,7 +137,6 @@ async function importFeed(directory) {
         category: trip.plk_category_code || route?.route_short_name || "IC",
         number: trip.plk_train_number || trip.trip_short_name,
         name: trip.plk_train_name || "",
-        headsign: trip.trip_headsign || "",
         stops: tripStops,
       },
     ];
@@ -172,10 +153,13 @@ async function importFeed(directory) {
   const generatedMatch = attributions
     .map((row) => row.organization_name.match(/\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\)/)?.[1])
     .find(Boolean);
+  if (!generatedMatch) {
+    throw new Error("GTFS attributions do not report the source generation time.");
+  }
 
   const timetableOutput = {
     schemaVersion: 1,
-    generatedAt: generatedMatch ?? new Date().toISOString(),
+    generatedAt: generatedMatch,
     validFrom: allDates.sort()[0] ?? null,
     validThrough: allDates.sort().at(-1) ?? null,
     sources: [
@@ -197,6 +181,45 @@ async function importFeed(directory) {
   const workspaceRoot = path.resolve(import.meta.dirname, "..");
   const timetableDirectory = path.join(workspaceRoot, "app", "data");
   await mkdir(timetableDirectory, { recursive: true });
+  const provenancePath = path.join(timetableDirectory, "provenance.json");
+  let existingProvenance = {};
+  try {
+    existingProvenance = JSON.parse(await readFile(provenancePath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const processedAt = options.processedAt ?? new Date().toISOString();
+  const retrievedAt = options.retrievedAt ?? processedAt;
+  const feedUrl =
+    options.sourceUrl ?? "https://mkuran.pl/gtfs/polish_trains.zip";
+  const provenanceOutput = {
+    ...existingProvenance,
+    timetable: {
+      sourceName: "PKP Polskie Linie Kolejowe S.A.",
+      sourceUrl:
+        "https://www.plk-sa.pl/klienci-i-kontrahenci/api-otwarte-dane",
+      feedName: "Polish Trains GTFS by Mikołaj Kuranowski",
+      feedUrl,
+      sourceGeneratedAt: timetableOutput.generatedAt,
+      retrievedAt,
+      processedAt,
+      reuseTermsUrl: "https://bip.plk-sa.pl/ponowne-wykorzystywanie",
+    },
+  };
+  const noticesPath = path.join(workspaceRoot, "THIRD_PARTY_NOTICES.md");
+  const timingNotice = [
+    `- Acquisition time: \`${retrievedAt}\``,
+    `- Processing time: \`${processedAt}\``,
+  ].join("\n");
+  const notices = (await readFile(noticesPath, "utf8"))
+    .replace(
+      /^- Source generation time reported by the feed: `[^`]*`$/m,
+      `- Source generation time reported by the feed: \`${timetableOutput.generatedAt}\``,
+    )
+    .replace(
+      /^(?:- Acquisition and processing (?:date|time): `[^`]*`|- Acquisition time: `[^`]*`\r?\n- Processing time: `[^`]*`)$/m,
+      timingNotice,
+    );
   await Promise.all([
     writeFile(
       path.join(workspaceRoot, "public", "stations.json"),
@@ -208,9 +231,28 @@ async function importFeed(directory) {
       `${JSON.stringify(timetableOutput)}\n`,
       "utf8",
     ),
+    writeFile(
+      provenancePath,
+      `${JSON.stringify(provenanceOutput, null, 2)}\n`,
+      "utf8",
+    ),
+    writeFile(noticesPath, notices, "utf8"),
   ]);
 
   console.log(
     `Imported ${tripsOutput.length} PKP Intercity trips, ${stationsOutput.length} stations, valid through ${timetableOutput.validThrough}.`,
   );
+}
+
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  const feedDirectory = process.argv[2];
+  if (!feedDirectory) {
+    console.error("Usage: node scripts/import-open-gtfs.mjs <extracted-gtfs-directory>");
+    process.exitCode = 1;
+  } else {
+    await importFeed(path.resolve(feedDirectory));
+  }
 }

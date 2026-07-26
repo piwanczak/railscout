@@ -1,4 +1,9 @@
 import { searchTimetable, TimetableError } from "@/app/lib/timetable";
+import {
+  HttpInputError,
+  jsonResponse,
+  readJsonBody,
+} from "@/app/lib/http";
 
 type SearchPayload = {
   startStationId?: number;
@@ -12,7 +17,7 @@ function isValidStationId(value: unknown): value is number {
 
 export async function POST(request: Request) {
   try {
-    const payload = (await request.json()) as SearchPayload;
+    const payload = await readJsonBody<SearchPayload>(request);
     if (
       !isValidStationId(payload.startStationId) ||
       !isValidStationId(payload.endStationId) ||
@@ -20,7 +25,7 @@ export async function POST(request: Request) {
       typeof payload.startDateTime !== "string" ||
       Number.isNaN(Date.parse(payload.startDateTime))
     ) {
-      return Response.json(
+      return jsonResponse(
         { error: "Nieprawidłowe dane wyszukiwania." },
         { status: 400 },
       );
@@ -31,16 +36,19 @@ export async function POST(request: Request) {
       endStationId: payload.endStationId,
       startDateTime: payload.startDateTime,
     });
-    return Response.json(result);
+    return jsonResponse(result);
   } catch (error) {
+    if (error instanceof HttpInputError) {
+      return jsonResponse({ error: error.message }, { status: error.status });
+    }
     console.error("Independent timetable search failed", error);
     if (error instanceof TimetableError) {
-      return Response.json(
+      return jsonResponse(
         { error: error.message, code: error.code },
         { status: error.status },
       );
     }
-    return Response.json(
+    return jsonResponse(
       { error: "Nie udało się pobrać niezależnego rozkładu." },
       { status: 502 },
     );

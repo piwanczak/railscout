@@ -128,6 +128,8 @@ export function intersectExactSeats(seatLists) {
  * @typedef {object} SegmentOutcome
  * @property {number} from
  * @property {number} to
+ * @property {number} fromIndex
+ * @property {number} toIndex
  * @property {string} timeFrom
  * @property {string} timeTo
  * @property {"available" | "unavailable" | "unknown"} state
@@ -160,6 +162,8 @@ export function deriveExactSegmentOutcomes(input) {
       const base = {
         from: from.id,
         to: to.id,
+        fromIndex,
+        toIndex,
         timeFrom: from.departure,
         timeTo: to.arrival,
       };

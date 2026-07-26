@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 /.npm-cache/
+/.cache/
 /.pnp
 .pnp.*
 .yarn/*
@@ -38,6 +39,7 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
 /dist/
 /.wrangler/
 /outputs/

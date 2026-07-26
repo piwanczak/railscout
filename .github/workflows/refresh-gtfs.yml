@@ -1,0 +1,53 @@
+name: Refresh GTFS snapshot
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-gtfs
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.0
+          cache: npm
+      - name: Restore the conditional-download cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .cache/gtfs
+          key: gtfs-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            gtfs-${{ runner.os }}-
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Download and import a fresh feed when it changed
+        run: npm run data:refresh -- --require-fresh
+      - name: Verify source, build, tests, data, and licenses
+        run: npm run check
+      - name: Commit a changed generated snapshot
+        shell: bash
+        run: |
+          if git diff --quiet -- app/data/ic-timetable.json app/data/provenance.json public/stations.json THIRD_PARTY_NOTICES.md; then
+            echo "The upstream GTFS feed produced no repository changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/data/ic-timetable.json app/data/provenance.json public/stations.json THIRD_PARTY_NOTICES.md
+          git commit -m "Refresh GTFS snapshot [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

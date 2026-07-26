@@ -51,6 +51,15 @@ const mockGrmServer = createServer((request, response) => {
     return;
   }
 
+  if (
+    request.url?.includes("/IC/8888/") &&
+    request.url.includes("/sklad/wbnet/")
+  ) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ unexpected: true }));
+    return;
+  }
+
   if (request.url?.includes("/sklad/wbnet/")) {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(composition));
@@ -58,6 +67,11 @@ const mockGrmServer = createServer((request, response) => {
   }
 
   if (request.url?.includes("/wagon/svg/wbnet/")) {
+    if (request.url.includes("/IC/7777/")) {
+      response.writeHead(200, { "Content-Type": "image/svg+xml" });
+      response.end('<svg xmlns="http://www.w3.org/2000/svg"><g><text>changed format</text></g></svg>');
+      return;
+    }
     const isDirectWarsawKrakow = request.url.endsWith("/5100136/5100051");
     const isReferenceTrain = request.url.includes("/IC/5330/");
     const places = isReferenceTrain
@@ -123,6 +137,9 @@ test("server-renders the exact-seat RailScout search experience", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
 
   const html = await response.text();
   assert.match(html, /<title>RailScout — dostępność miejsc we wszystkich połączeniach<\/title>/i);
@@ -132,6 +149,7 @@ test("server-renders the exact-seat RailScout search experience", async () => {
   assert.match(html, /Znajdź wszystkie połączenia/);
   assert.match(html, /Warszawa Centralna/);
   assert.match(html, /Kraków Główny/);
+  assert.match(html, /<meta name="robots" content="noindex, nofollow, noarchive"/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
@@ -160,7 +178,16 @@ test("ships independent data and no consumer-site endpoint", async () => {
   assert.match(layout, /generateMetadata/);
   assert.match(layout, /socialImage/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
-  assert.ok(JSON.parse(stations).length > 500);
+  const stationCatalogue = JSON.parse(stations);
+  assert.ok(stationCatalogue.length > 500);
+  assert.ok(
+    stationCatalogue.every(
+      (station) =>
+        Number.isInteger(station.id) &&
+        typeof station.name === "string" &&
+        Object.keys(station).every((key) => ["id", "name"].includes(key)),
+    ),
+  );
   assert.ok(JSON.parse(timetable).trips.length > 3000);
   assert.doesNotMatch(
     `${trainsRoute}\n${seatsRoute}\n${seatProvider}`,
@@ -173,6 +200,50 @@ test("ships independent data and no consumer-site endpoint", async () => {
   await access(new URL("../app/lib/seat-planner.mjs", import.meta.url));
   await access(new URL("../app/seat-sweep-app.tsx", import.meta.url));
   await access(templateRoot);
+});
+
+test("ships complete open-source metadata and visible data provenance", async () => {
+  const [packageText, license, notices, security, provenance, socialImage] =
+    await Promise.all([
+      readFile(new URL("../package.json", import.meta.url), "utf8"),
+      readFile(new URL("../LICENSE", import.meta.url), "utf8"),
+      readFile(new URL("../THIRD_PARTY_NOTICES.md", import.meta.url), "utf8"),
+      readFile(new URL("../SECURITY.md", import.meta.url), "utf8"),
+      readFile(new URL("../app/data/provenance.json", import.meta.url), "utf8").then(JSON.parse),
+      readFile(new URL("../public/og.png", import.meta.url)),
+    ]);
+  const packageManifest = JSON.parse(packageText);
+
+  assert.equal(packageManifest.license, "MIT");
+  assert.equal(
+    packageManifest.repository.url,
+    "git+https://github.com/piwanczak/railscout.git",
+  );
+  assert.match(license, /^MIT License/m);
+  assert.match(notices, /PKP PLK public-sector information reuse terms/);
+  assert.match(notices, new RegExp(provenance.timetable.sourceGeneratedAt));
+  assert.match(security, /private vulnerability-reporting/i);
+  assert.equal(socialImage.readUInt32BE(16), 1200);
+  assert.equal(socialImage.readUInt32BE(20), 630);
+
+  for (const removedStarterPath of [
+    "../app/chatgpt-auth.ts",
+    "../db/index.ts",
+    "../drizzle.config.ts",
+    "../examples/d1/db/schema.ts",
+    "../public/file.svg",
+  ]) {
+    await assert.rejects(access(new URL(removedStarterPath, import.meta.url)));
+  }
+
+  const legalResponse = await appFetch("/dane-i-licencje", {
+    headers: { accept: "text/html", host: "localhost" },
+  });
+  assert.equal(legalResponse.status, 200);
+  const legalHtml = await legalResponse.text();
+  assert.match(legalHtml, /Dane i licencje/);
+  assert.match(legalHtml, new RegExp(provenance.timetable.sourceGeneratedAt));
+  assert.match(legalHtml, /nie jest powiązany z PKP Intercity/i);
 });
 
 test("parses concrete GRM places and excludes occupied or specialised seats", () => {
@@ -220,6 +291,8 @@ test("derives every combination by intersecting the same exact seat", () => {
     directOutcome: {
       from: 10,
       to: 40,
+      fromIndex: 0,
+      toIndex: 3,
       timeFrom: "a",
       timeTo: "d",
       state: "unavailable",
@@ -288,6 +361,42 @@ test("the planner prefers one ticket, then the plan with more spare seats", () =
   );
 });
 
+test("the planner handles routes that visit the same station twice", () => {
+  const plan = findAvailabilityPlan({
+    stationIds: [10, 20, 10, 40],
+    segments: [
+      {
+        from: 10,
+        to: 10,
+        fromIndex: 0,
+        toIndex: 2,
+        timeFrom: "a",
+        timeTo: "c",
+        freeSeats: 3,
+        seats: [],
+      },
+      {
+        from: 10,
+        to: 40,
+        fromIndex: 2,
+        toIndex: 3,
+        timeFrom: "c",
+        timeTo: "d",
+        freeSeats: 2,
+        seats: [],
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    plan?.map(({ fromIndex, toIndex }) => ({ fromIndex, toIndex })),
+    [
+      { fromIndex: 0, toIndex: 2 },
+      { fromIndex: 2, toIndex: 3 },
+    ],
+  );
+});
+
 test("returns connection-specific e-IC links and a safe unknown inventory state", async () => {
   const trainsResponse = await appFetch("/api/trains", {
     method: "POST",
@@ -312,11 +421,8 @@ test("returns connection-specific e-IC links and a safe unknown inventory state"
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      uuid: "test-train-1",
       category: "IC",
       trainNumber: "1234",
-      startDateTime: "2026-07-26T13:00:00+02:00",
-      arrivalDateTime: "2026-07-26T14:00:00+02:00",
       stationStops: [
         { id: 999001, arrival: "2026-07-26T13:00:00+02:00", departure: "2026-07-26T13:00:00+02:00" },
         { id: 999002, arrival: "2026-07-26T14:00:00+02:00", departure: "2026-07-26T14:00:00+02:00" },
@@ -339,11 +445,8 @@ test("availability API returns the exact reference seat from official-style GRM 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      uuid: "reference-5330",
       category: "IC",
       trainNumber: "5330",
-      startDateTime: "2026-07-27T10:08:00+02:00",
-      arrivalDateTime: "2026-07-27T14:39:00+02:00",
       stationStops: [
         { id: 33605, arrival: "2026-07-27T10:08:00+02:00", departure: "2026-07-27T10:08:00+02:00" },
         { id: 80416, arrival: "2026-07-27T14:39:00+02:00", departure: "2026-07-27T14:39:00+02:00" },
@@ -369,9 +472,9 @@ test("availability API returns the exact reference seat from official-style GRM 
     mockGrmRequests.every(
       (request) =>
         request.url?.includes("/grm/") &&
-        request.appVersion === "1.5.20" &&
-        request.origin === "https://ebilet.intercity.pl" &&
-        request.referer === "https://ebilet.intercity.pl/",
+        request.appVersion === undefined &&
+        request.origin === undefined &&
+        request.referer === undefined,
     ),
   );
 });
@@ -382,11 +485,8 @@ test("availability API checks the full route, derives every pair, and returns a 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      uuid: "test-train-available",
       category: "IC",
       trainNumber: "1234/5",
-      startDateTime: "2026-07-26T13:00:00+02:00",
-      arrivalDateTime: "2026-07-26T16:00:00+02:00",
       stationStops: [
         { id: 33605, arrival: "2026-07-26T13:00:00+02:00", departure: "2026-07-26T13:00:00+02:00" },
         { id: 64899, arrival: "2026-07-26T14:30:00+02:00", departure: "2026-07-26T14:32:00+02:00" },
@@ -424,11 +524,8 @@ test("carrier outages stay unknown instead of becoming false sold-out results", 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      uuid: "test-train-outage",
       category: "IC",
       trainNumber: "9999",
-      startDateTime: "2026-07-26T13:00:00+02:00",
-      arrivalDateTime: "2026-07-26T16:00:00+02:00",
       stationStops: [
         { id: 33605, arrival: "2026-07-26T13:00:00+02:00", departure: "2026-07-26T13:00:00+02:00" },
         { id: 64899, arrival: "2026-07-26T14:30:00+02:00", departure: "2026-07-26T14:32:00+02:00" },
@@ -448,6 +545,93 @@ test("carrier outages stay unknown instead of becoming false sold-out results", 
   assert.equal(payload.totalSegments, 3);
   assert.match(payload.message, /PKP Intercity/i);
   assert.equal(mockGrmRequests.length, 1);
+});
+
+test("malformed carrier payloads stay unknown instead of becoming sold out", async () => {
+  for (const trainNumber of ["7777", "8888"]) {
+    const response = await appFetch("/api/availability", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: "IC",
+        trainNumber,
+        stationStops: [
+          {
+            id: 33605,
+            arrival: "2026-07-27T10:08:00+02:00",
+            departure: "2026-07-27T10:08:00+02:00",
+          },
+          {
+            id: 80416,
+            arrival: "2026-07-27T14:39:00+02:00",
+            departure: "2026-07-27T14:39:00+02:00",
+          },
+        ],
+        numberOfPassengers: 1,
+        ticketClass: 2,
+        bike: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).status, "unknown");
+  }
+});
+
+test("API input failures are bounded, explicit, and never cached", async () => {
+  const malformed = await appFetch("/api/availability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{",
+  });
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.headers.get("cache-control"), "no-store");
+
+  const wrongType = await appFetch("/api/trains", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: "{}",
+  });
+  assert.equal(wrongType.status, 415);
+
+  const nullBody = await appFetch("/api/trains", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+  assert.equal(nullBody.status, 400);
+
+  const oversized = await appFetch("/api/trains", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ padding: "x".repeat(70_000) }),
+  });
+  assert.equal(oversized.status, 413);
+
+  const backwards = await appFetch("/api/availability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      category: "IC",
+      trainNumber: "1234",
+      stationStops: [
+        {
+          id: 33605,
+          arrival: "2026-07-27T12:00:00+02:00",
+          departure: "2026-07-27T12:00:00+02:00",
+        },
+        {
+          id: 80416,
+          arrival: "2026-07-27T11:00:00+02:00",
+          departure: "2026-07-27T11:00:00+02:00",
+        },
+      ],
+      numberOfPassengers: 1,
+      ticketClass: 2,
+      bike: false,
+    }),
+  });
+  assert.equal(backwards.status, 400);
 });
 
 test("local preview serves the hydrated UI and seat API on one origin", async (context) => {
@@ -512,11 +696,8 @@ test("local preview serves the hydrated UI and seat API on one origin", async (c
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        uuid: "preview-5330",
         category: "IC",
         trainNumber: "5330",
-        startDateTime: "2026-07-27T10:08:00+02:00",
-        arrivalDateTime: "2026-07-27T14:39:00+02:00",
         stationStops: [
           {
             id: 33605,
@@ -544,4 +725,14 @@ test("local preview serves the hydrated UI and seat API on one origin", async (c
     seat: "104",
     label: "Miejsce 104 klasa 2, korytarz, Wolne, niewybrane",
   });
+
+  const oversizedResponse = await fetch(
+    `http://127.0.0.1:${port}/api/trains`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(70_000) }),
+    },
+  );
+  assert.equal(oversizedResponse.status, 413);
 });

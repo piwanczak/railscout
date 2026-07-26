@@ -3,6 +3,7 @@ import {
   buildEicBookingUrl,
   normaliseEicCategory,
 } from "./eic";
+import { BoundedTtlCache } from "./ttl-cache";
 
 type SnapshotStop = [
   stationId: number,
@@ -18,11 +19,11 @@ type SnapshotTrip = {
   category: string;
   number: string;
   name: string;
-  headsign: string;
   stops: SnapshotStop[];
 };
 
 type TimetableSnapshot = {
+  schemaVersion: 1;
   generatedAt: string;
   validFrom: string;
   validThrough: string;
@@ -110,10 +111,10 @@ export class TimetableError extends Error {
 const snapshot = snapshotJson as unknown as TimetableSnapshot;
 const PLK_API_BASE = "https://pdp-api.plk-sa.pl/api/v1";
 const MAX_RESULTS = 100;
-const plkCache = new Map<
-  string,
-  { expiresAt: number; value: { trains: TrainResult[]; source: ScheduleSource } }
->();
+const plkCache = new BoundedTtlCache<{
+  trains: TrainResult[];
+  source: ScheduleSource;
+}>(128);
 
 function datePart(value: string) {
   return value.slice(0, 10);
@@ -250,9 +251,9 @@ async function searchOfficialPlk(input: {
   apiKey: string;
 }) {
   const date = datePart(input.startDateTime);
-  const cacheKey = `${date}:${input.startStationId}:${input.endStationId}`;
+  const cacheKey = `${input.startDateTime}:${input.startStationId}:${input.endStationId}`;
   const cached = plkCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (cached) return cached;
 
   const query = new URLSearchParams({
     dateFrom: date,
@@ -378,7 +379,7 @@ async function searchOfficialPlk(input: {
       url: "https://www.plk-sa.pl/klienci-i-kontrahenci/api-otwarte-dane",
     },
   };
-  plkCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60_000, value });
+  plkCache.set(cacheKey, value, 5 * 60_000);
   return value;
 }
 

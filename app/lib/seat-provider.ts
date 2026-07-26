@@ -10,6 +10,7 @@ import {
   sortExactSeats,
   summariseExactAvailability,
 } from "./eic-availability.mjs";
+import { BoundedTtlCache } from "./ttl-cache";
 
 export type TrainStationStop = {
   id: number;
@@ -25,11 +26,8 @@ export type ExactSeat = {
 
 export type SeatInventoryRequest = {
   train: {
-    id: string;
     number: string;
     category: string;
-    departure: string;
-    arrival: string;
   };
   stationStops: TrainStationStop[];
   numberOfPassengers: number;
@@ -47,6 +45,8 @@ type SegmentInventory = {
 type SegmentOutcome = SegmentInventory & {
   from: number;
   to: number;
+  fromIndex: number;
+  toIndex: number;
   timeFrom: string;
   timeTo: string;
   freeSeats: number;
@@ -74,14 +74,76 @@ const GRM_BASE = (() => {
     return OFFICIAL_GRM_BASE;
   }
 })();
-const MAP_CONCURRENCY = 6;
+const MAP_CONCURRENCY = 4;
+const OUTBOUND_CONCURRENCY = 10;
+const MAX_OUTBOUND_WAITERS = 100;
 const CACHE_MILLISECONDS = 90_000;
-const responseCache = new Map<
-  string,
-  { expiresAt: number; payload: unknown }
->();
+const MAX_COMPOSITION_BYTES = 256 * 1024;
+const MAX_SEAT_MAP_BYTES = 2 * 1024 * 1024;
+const responseCache = new BoundedTtlCache<unknown>(512);
+const inFlightRequests = new Map<string, Promise<unknown>>();
+const outboundWaiters: Array<() => void> = [];
+let activeOutboundRequests = 0;
 
 class ProviderUnavailableError extends Error {}
+
+async function withOutboundSlot<T>(task: () => Promise<T>) {
+  if (activeOutboundRequests < OUTBOUND_CONCURRENCY) {
+    activeOutboundRequests += 1;
+  } else {
+    if (outboundWaiters.length >= MAX_OUTBOUND_WAITERS) {
+      throw new ProviderUnavailableError("Seat-map request queue is full");
+    }
+    await new Promise<void>((resolve) => outboundWaiters.push(resolve));
+  }
+
+  try {
+    return await task();
+  } finally {
+    const next = outboundWaiters.shift();
+    if (next) next();
+    else activeOutboundRequests -= 1;
+  }
+}
+
+async function readBoundedResponse(response: Response, maximumBytes: number) {
+  const contentLength = response.headers.get("content-length");
+  const declaredLength = contentLength === null ? null : Number(contentLength);
+  if (
+    declaredLength !== null &&
+    Number.isFinite(declaredLength) &&
+    declaredLength > maximumBytes
+  ) {
+    throw new ProviderUnavailableError("Seat-map response is too large");
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let receivedBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      receivedBytes += value.byteLength;
+      if (receivedBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new ProviderUnavailableError("Seat-map response is too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(receivedBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
 
 function endpoint(parts: Array<string | number>) {
   return `${GRM_BASE}/${parts.map((part) => encodeURIComponent(String(part))).join("/")}`;
@@ -135,45 +197,54 @@ function wagonUrl(input: {
 async function fetchGrm(url: string, format: "json" | "text") {
   const cacheKey = `${format}:${url}`;
   const cached = responseCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  if (cached !== undefined) return cached;
+  const inFlight = inFlightRequests.get(cacheKey);
+  if (inFlight) return inFlight;
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "App-Version": "1.5.20",
-        "App-Version-1.5.20": "",
-        Origin: "https://ebilet.intercity.pl",
-        Referer: "https://ebilet.intercity.pl/",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
-      },
-      cache: "no-store",
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch (error) {
-    throw new ProviderUnavailableError(
-      error instanceof Error ? error.message : "Seat-map service unavailable",
-    );
-  }
+  const request = withOutboundSlot(async () => {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          Accept:
+            format === "json"
+              ? "application/json"
+              : "image/svg+xml,text/plain;q=0.8,*/*;q=0.5",
+        },
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error) {
+      throw new ProviderUnavailableError(
+        error instanceof Error
+          ? error.message
+          : "Seat-map service unavailable",
+      );
+    }
 
-  if (response.status === 429 || response.status >= 500) {
-    throw new ProviderUnavailableError(`Seat-map service returned ${response.status}`);
-  }
-  if (!response.ok) return null;
+    if (response.status === 429 || response.status >= 500) {
+      throw new ProviderUnavailableError(
+        `Seat-map service returned ${response.status}`,
+      );
+    }
+    if (!response.ok) return null;
 
-  try {
-    const payload =
-      format === "json" ? ((await response.json()) as unknown) : await response.text();
-    responseCache.set(cacheKey, {
-      expiresAt: Date.now() + CACHE_MILLISECONDS,
-      payload,
-    });
-    return payload;
-  } catch {
-    return null;
-  }
+    try {
+      const text = await readBoundedResponse(
+        response,
+        format === "json" ? MAX_COMPOSITION_BYTES : MAX_SEAT_MAP_BYTES,
+      );
+      const payload = format === "json" ? (JSON.parse(text) as unknown) : text;
+      responseCache.set(cacheKey, payload, CACHE_MILLISECONDS);
+      return payload;
+    } catch (error) {
+      if (error instanceof ProviderUnavailableError) throw error;
+      return null;
+    }
+  }).finally(() => inFlightRequests.delete(cacheKey));
+
+  inFlightRequests.set(cacheKey, request);
+  return request;
 }
 
 function stringList(value: unknown) {
@@ -253,10 +324,20 @@ async function lookupInventory(
   }
 
   const composition = compositionPayload as GrmComposition;
+  const selectedClass =
+    input.ticketClass === 1 ? composition.klasa1 : composition.klasa2;
+  if (
+    !Array.isArray(composition.wagony) ||
+    !Array.isArray(selectedClass) ||
+    !composition.wagonySchemat ||
+    typeof composition.wagonySchemat !== "object" ||
+    Array.isArray(composition.wagonySchemat)
+  ) {
+    return { state: "unknown", seats: [] };
+  }
+
   const allWagons = new Set(stringList(composition.wagony));
-  const classWagons = stringList(
-    input.ticketClass === 1 ? composition.klasa1 : composition.klasa2,
-  );
+  const classWagons = stringList(selectedClass);
   const unavailableWagons = new Set(
     stringList(composition.wagonyNiedostepne),
   );
@@ -272,6 +353,7 @@ async function lookupInventory(
     );
   }
 
+  if (allWagons.size === 0) return { state: "unknown", seats: [] };
   if (classWagons.length === 0 || relevantWagons.length === 0) {
     return { state: "unavailable", seats: [] };
   }
@@ -305,7 +387,7 @@ async function lookupInventory(
         ticketClass: input.ticketClass,
         bike: input.bike,
       });
-      if (!parsed) {
+      if (!parsed || parsed.eligiblePlaces === 0) {
         incompleteMaps = true;
         return [] as ExactSeat[];
       }
@@ -326,10 +408,14 @@ function outcomeFor(
   from: TrainStationStop,
   to: TrainStationStop,
   numberOfPassengers: number,
+  fromIndex: number,
+  toIndex: number,
 ): SegmentOutcome {
   return {
     from: from.id,
     to: to.id,
+    fromIndex,
+    toIndex,
     timeFrom: from.departure,
     timeTo: to.arrival,
     state: inventory.state,
@@ -362,6 +448,8 @@ export async function fetchSeatAvailability(input: SeatInventoryRequest) {
     first,
     last,
     input.numberOfPassengers,
+    0,
+    input.stationStops.length - 1,
   );
 
   let legInventories: SegmentInventory[];

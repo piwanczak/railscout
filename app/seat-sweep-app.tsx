@@ -5,8 +5,6 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 type Station = {
   id: number;
   name: string;
-  slug: string;
-  city: string;
 };
 
 type Train = {
@@ -75,25 +73,66 @@ type SearchPhase = "idle" | "loading-trains" | "checking" | "done";
 type SortKey = "recommended" | "departure" | "seats" | "switches";
 
 const PARALLEL_CHECKS = 4;
+const WARSAW_TIME_ZONE = "Europe/Warsaw";
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
 function localDefaults() {
-  const now = new Date();
-  const rounded = new Date(now.getTime() + 15 * 60 * 1000);
-  rounded.setMinutes(Math.ceil(rounded.getMinutes() / 15) * 15, 0, 0);
+  const rounded = new Date(
+    Math.ceil((Date.now() + 15 * 60_000) / (15 * 60_000)) * 15 * 60_000,
+  );
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: WARSAW_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(rounded);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "";
 
   return {
-    date: `${rounded.getFullYear()}-${pad(rounded.getMonth() + 1)}-${pad(rounded.getDate())}`,
-    time: `${pad(rounded.getHours())}:${pad(rounded.getMinutes())}`,
+    date: `${part("year")}-${part("month")}-${part("day")}`,
+    time: `${part("hour")}:${part("minute")}`,
   };
 }
 
 function toIsoWithOffset(date: string, time: string) {
-  const local = new Date(`${date}T${time}:00`);
-  const offset = -local.getTimezoneOffset();
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const wallClock = Date.UTC(year, month - 1, day, hour, minute);
+  let instant = wallClock;
+  let offset = 0;
+
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: WARSAW_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(instant));
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((candidate) => candidate.type === type)?.value ?? 0);
+    const represented = Date.UTC(
+      part("year"),
+      part("month") - 1,
+      part("day"),
+      part("hour"),
+      part("minute"),
+      part("second"),
+    );
+    offset = Math.round((represented - instant) / 60_000);
+    instant = wallClock - offset * 60_000;
+  }
+
   const sign = offset >= 0 ? "+" : "-";
   const hours = pad(Math.floor(Math.abs(offset) / 60));
   const minutes = pad(Math.abs(offset) % 60);
@@ -109,6 +148,7 @@ function formatTime(value: string) {
   return new Intl.DateTimeFormat("pl-PL", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: WARSAW_TIME_ZONE,
   }).format(new Date(value));
 }
 
@@ -118,6 +158,28 @@ function formatDate(value: string) {
     weekday: "long",
     day: "numeric",
     month: "long",
+    timeZone: WARSAW_TIME_ZONE,
+  }).format(new Date(value));
+}
+
+function dateKey(value: string) {
+  if (!value) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: WARSAW_TIME_ZONE,
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function formatShortDate(value: string) {
+  return new Intl.DateTimeFormat("pl-PL", {
+    day: "numeric",
+    month: "short",
+    timeZone: WARSAW_TIME_ZONE,
   }).format(new Date(value));
 }
 
@@ -301,12 +363,9 @@ export function SeatSweepApp() {
             headers: { "Content-Type": "application/json" },
             signal: controller.signal,
             body: JSON.stringify({
-              uuid: train.uuid,
               category: train.category,
               trainNumber: train.trainNumber,
               stationStops: train.stationStops,
-              startDateTime: train.departure,
-              arrivalDateTime: train.arrival,
               numberOfPassengers,
               bike,
               ticketClass,
@@ -588,9 +647,7 @@ export function SeatSweepApp() {
 
           <datalist id="rail-stations">
             {stations.map((station) => (
-              <option key={station.id} value={station.name}>
-                {station.city && station.city !== station.name ? station.city : "Polska"}
-              </option>
+              <option key={station.id} value={station.name} />
             ))}
           </datalist>
 
@@ -781,6 +838,7 @@ export function SeatSweepApp() {
                 stationById={stationById}
                 ticketClass={ticketClass}
                 numberOfPassengers={numberOfPassengers}
+                searchDateTime={searchedRoute.dateTime}
               />
             ))}
           </div>
@@ -821,6 +879,14 @@ export function SeatSweepApp() {
           <a href="https://mkuran.pl/gtfs/" target="_blank" rel="noreferrer">
             GTFS
           </a>
+          <a href="/dane-i-licencje">Dane i licencje</a>
+          <a
+            href="https://github.com/piwanczak/railscout"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Kod źródłowy
+          </a>
         </span>
       </footer>
     </main>
@@ -834,6 +900,7 @@ function TrainCard({
   stationById,
   ticketClass,
   numberOfPassengers,
+  searchDateTime,
 }: {
   train: Train;
   check: CheckState;
@@ -841,12 +908,21 @@ function TrainCard({
   stationById: Map<number, Station>;
   ticketClass: 1 | 2;
   numberOfPassengers: number;
+  searchDateTime: string;
 }) {
   const switches = seatSwitches(check);
   const isAvailable = check.status === "available";
   const isBest = rank === 1 && isAvailable;
   const freeSeats = check.minimumFreeSeats ?? 0;
   const firstSeat = check.segments?.[0]?.seats[0];
+  const departureDate =
+    dateKey(train.departure) === dateKey(searchDateTime)
+      ? ""
+      : formatShortDate(train.departure);
+  const arrivalDate =
+    dateKey(train.arrival) === dateKey(searchDateTime)
+      ? ""
+      : formatShortDate(train.arrival);
   const routeLabel =
     switches === 0
       ? "Bez podziału trasy"
@@ -867,6 +943,7 @@ function TrainCard({
           <div>
             <strong>{formatTime(train.departure)}</strong>
             <small>
+              {departureDate ? `${departureDate} · ` : ""}
               {train.departurePlatform
                 ? `peron ${train.departurePlatform}${train.departureTrack ? ` / tor ${train.departureTrack}` : ""}`
                 : "odjazd"}
@@ -879,6 +956,7 @@ function TrainCard({
           <div>
             <strong>{formatTime(train.arrival)}</strong>
             <small>
+              {arrivalDate ? `${arrivalDate} · ` : ""}
               {train.arrivalPlatform
                 ? `peron ${train.arrivalPlatform}${train.arrivalTrack ? ` / tor ${train.arrivalTrack}` : ""}`
                 : "przyjazd"}

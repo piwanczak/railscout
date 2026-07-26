@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const clientRoot = resolve(projectRoot, "dist/client");
 const workerEntry = resolve(projectRoot, "dist/server/index.js");
+const maximumRequestBodyBytes = 64 * 1024;
+
+class PayloadTooLargeError extends Error {}
 
 const contentTypes = new Map([
   [".avif", "image/avif"],
@@ -102,7 +105,14 @@ async function fetchAsset(request) {
 
 async function requestBody(request) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  let receivedBytes = 0;
+  for await (const chunk of request) {
+    receivedBytes += chunk.byteLength;
+    if (receivedBytes > maximumRequestBodyBytes) {
+      throw new PayloadTooLargeError();
+    }
+    chunks.push(chunk);
+  }
   return chunks.length ? Buffer.concat(chunks) : undefined;
 }
 
@@ -151,9 +161,17 @@ const server = createServer(async (nodeRequest, nodeResponse) => {
   } catch (error) {
     console.error(error);
     if (!nodeResponse.headersSent) {
-      nodeResponse.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      nodeResponse.writeHead(error instanceof PayloadTooLargeError ? 413 : 500, {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff",
+      });
     }
-    nodeResponse.end("Internal server error");
+    nodeResponse.end(
+      error instanceof PayloadTooLargeError
+        ? "Request body too large"
+        : "Internal server error",
+    );
   }
 });
 
