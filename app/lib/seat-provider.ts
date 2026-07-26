@@ -88,16 +88,37 @@ const GRM_API_TOKEN =
   configuredGrmToken && configuredGrmToken.length >= 32
     ? configuredGrmToken
     : null;
-const MAP_CONCURRENCY = 4;
-const OUTBOUND_CONCURRENCY = 10;
+const MAP_CONCURRENCY = 1;
 const MAX_OUTBOUND_WAITERS = 100;
+const REQUEST_TIMEOUT_MILLISECONDS = positiveIntegerSetting(
+  process.env.EIC_GRM_REQUEST_TIMEOUT_MS,
+  4_000,
+);
+const OUTBOUND_INTERVAL_MILLISECONDS = positiveIntegerSetting(
+  process.env.EIC_GRM_MIN_INTERVAL_MS,
+  500,
+);
 const CACHE_MILLISECONDS = 90_000;
 const MAX_COMPOSITION_BYTES = 256 * 1024;
 const MAX_SEAT_MAP_BYTES = 2 * 1024 * 1024;
 const responseCache = new BoundedTtlCache<unknown>(512);
 const inFlightRequests = new Map<string, Promise<unknown>>();
-const outboundWaiters: Array<() => void> = [];
-let activeOutboundRequests = 0;
+type OutboundJob<T = unknown> = {
+  task: () => Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+
+const outboundWaiters: Array<OutboundJob> = [];
+let activeOutboundRequest = false;
+let nextOutboundRequestAt = 0;
+
+function positiveIntegerSetting(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 class ProviderUnavailableError extends Error {
   constructor(
@@ -136,9 +157,40 @@ function grmHeaders(format: "json" | "text") {
   return headers;
 }
 
-async function fetchWithTimeout(url: string, format: "json" | "text") {
+function abortError(message = "Seat-map request aborted") {
+  return new DOMException(message, "AbortError");
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal) {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(finish, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    function finish() {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function fetchWithTimeout(
+  url: string,
+  format: "json" | "text",
+  parentSignal?: AbortSignal,
+) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  const timeout = setTimeout(
+    () => controller.abort(abortError("Seat-map request timed out")),
+    REQUEST_TIMEOUT_MILLISECONDS,
+  );
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
 
   try {
     return await fetch(url, {
@@ -147,26 +199,47 @@ async function fetchWithTimeout(url: string, format: "json" | "text") {
     });
   } finally {
     clearTimeout(timeout);
+    parentSignal?.removeEventListener("abort", abortFromParent);
   }
 }
 
-async function withOutboundSlot<T>(task: () => Promise<T>) {
-  if (activeOutboundRequests < OUTBOUND_CONCURRENCY) {
-    activeOutboundRequests += 1;
-  } else {
-    if (outboundWaiters.length >= MAX_OUTBOUND_WAITERS) {
-      throw new ProviderUnavailableError("Seat-map request queue is full");
-    }
-    await new Promise<void>((resolve) => outboundWaiters.push(resolve));
-  }
-
+async function runNextOutboundJob() {
+  if (activeOutboundRequest) return;
+  const job = outboundWaiters.shift();
+  if (!job) return;
+  activeOutboundRequest = true;
   try {
-    return await task();
+    const delay = Math.max(0, nextOutboundRequestAt - Date.now());
+    if (delay > 0) await abortableDelay(delay, job.signal);
+    if (job.signal?.aborted) throw abortError();
+    nextOutboundRequestAt = Date.now() + OUTBOUND_INTERVAL_MILLISECONDS;
+    job.resolve(await job.task());
+  } catch (error) {
+    job.reject(error);
   } finally {
-    const next = outboundWaiters.shift();
-    if (next) next();
-    else activeOutboundRequests -= 1;
+    if (job.onAbort) job.signal?.removeEventListener("abort", job.onAbort);
+    activeOutboundRequest = false;
+    void runNextOutboundJob();
   }
+}
+
+function withOutboundSlot<T>(task: () => Promise<T>, signal?: AbortSignal) {
+  if (signal?.aborted) return Promise.reject(abortError());
+  if (outboundWaiters.length >= MAX_OUTBOUND_WAITERS) {
+    throw new ProviderUnavailableError("Seat-map request queue is full", 429);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const job: OutboundJob<T> = { task, resolve, reject, signal };
+    job.onAbort = () => {
+      const index = outboundWaiters.indexOf(job as OutboundJob);
+      if (index < 0) return;
+      outboundWaiters.splice(index, 1);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", job.onAbort, { once: true });
+    outboundWaiters.push(job as OutboundJob);
+    void runNextOutboundJob();
+  });
 }
 
 async function readBoundedResponse(response: Response, maximumBytes: number) {
@@ -257,7 +330,11 @@ function wagonUrl(input: {
   ]);
 }
 
-async function fetchGrm(url: string, format: "json" | "text") {
+async function fetchGrm(
+  url: string,
+  format: "json" | "text",
+  signal?: AbortSignal,
+) {
   const cacheKey = `${format}:${url}`;
   const cached = responseCache.get(cacheKey);
   if (cached !== undefined) return cached;
@@ -267,7 +344,7 @@ async function fetchGrm(url: string, format: "json" | "text") {
   const request = withOutboundSlot(async () => {
     let response: Response;
     try {
-      response = await fetchWithTimeout(url, format);
+      response = await fetchWithTimeout(url, format, signal);
     } catch (error) {
       throw new ProviderUnavailableError(
         error instanceof Error
@@ -302,7 +379,7 @@ async function fetchGrm(url: string, format: "json" | "text") {
       if (error instanceof ProviderUnavailableError) throw error;
       return null;
     }
-  }).finally(() => inFlightRequests.delete(cacheKey));
+  }, signal).finally(() => inFlightRequests.delete(cacheKey));
 
   inFlightRequests.set(cacheKey, request);
   return request;
@@ -364,6 +441,7 @@ async function lookupInventory(
   input: SeatInventoryRequest,
   from: TrainStationStop,
   to: TrainStationStop,
+  signal?: AbortSignal,
 ): Promise<SegmentInventory> {
   const fromCodes = getEicStationCodes(from.id);
   const toCodes = getEicStationCodes(to.id);
@@ -379,6 +457,7 @@ async function lookupInventory(
       toCode: toCodes.availabilityCode,
     }),
     "json",
+    signal,
   );
   if (!compositionPayload || typeof compositionPayload !== "object") {
     return { state: "unknown", seats: [] };
@@ -442,6 +521,7 @@ async function lookupInventory(
           toCode: toCodes.availabilityCode,
         }),
         "text",
+        signal,
       );
       const parsed = parseGrmSeatMap(svg, {
         wagon,
@@ -489,7 +569,10 @@ function unknownLeg(): SegmentInventory {
   return { state: "unknown", seats: [] };
 }
 
-export async function fetchSeatAvailability(input: SeatInventoryRequest) {
+export async function fetchSeatAvailability(
+  input: SeatInventoryRequest,
+  signal?: AbortSignal,
+) {
   const stationIds = input.stationStops.map((stop) => stop.id);
   const first = input.stationStops[0];
   const last = input.stationStops.at(-1);
@@ -518,7 +601,7 @@ export async function fetchSeatAvailability(input: SeatInventoryRequest) {
 
   let directInventory = unknownLeg();
   try {
-    directInventory = await lookupInventory(input, first, last);
+    directInventory = await lookupInventory(input, first, last, signal);
   } catch (error) {
     reportLookupFailure(error);
   }
@@ -547,7 +630,12 @@ export async function fetchSeatAvailability(input: SeatInventoryRequest) {
       async (from, index) => {
         if (providerUnavailable) return unknownLeg();
         try {
-          return await lookupInventory(input, from, input.stationStops[index + 1]);
+          return await lookupInventory(
+            input,
+            from,
+            input.stationStops[index + 1],
+            signal,
+          );
         } catch (error) {
           reportLookupFailure(error);
           return unknownLeg();
@@ -567,6 +655,8 @@ export async function fetchSeatAvailability(input: SeatInventoryRequest) {
   return {
     ...summary,
     inventorySource: "PKP Intercity GRM",
+    retryable: providerUnavailable,
+    retryAfterMs: providerUnavailable ? 1_000 : undefined,
     message:
       summary.status === "unknown"
         ? providerUnavailable

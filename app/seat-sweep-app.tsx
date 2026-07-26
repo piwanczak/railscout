@@ -72,7 +72,9 @@ type ScheduleSource = {
 type SearchPhase = "idle" | "loading-trains" | "checking" | "done";
 type SortKey = "recommended" | "departure" | "seats" | "switches";
 
-const PARALLEL_CHECKS = 4;
+const AVAILABILITY_TIMEOUT_MS = 12_000;
+const AVAILABILITY_RETRY_DELAY_MS = 1_000;
+const CONNECTION_CHECK_DELAY_MS = 750;
 const WARSAW_TIME_ZONE = "Europe/Warsaw";
 
 function pad(value: number) {
@@ -346,97 +348,144 @@ export function SeatSweepApp() {
     token: number,
     controller: AbortController,
   ) {
-    let cursor = 0;
+    const wait = (milliseconds: number) => {
+      if (controller.signal.aborted) {
+        return Promise.reject(new DOMException("Search cancelled", "AbortError"));
+      }
+      return new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(finish, milliseconds);
+        const onAbort = () => {
+          clearTimeout(timeout);
+          controller.signal.removeEventListener("abort", onAbort);
+          reject(new DOMException("Search cancelled", "AbortError"));
+        };
+        function finish() {
+          controller.signal.removeEventListener("abort", onAbort);
+          resolve();
+        }
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+      });
+    };
 
-    async function worker() {
-      while (cursor < candidates.length) {
-        const index = cursor;
-        cursor += 1;
-        const train = candidates[index];
-        if (token !== searchToken.current || controller.signal.aborted) return;
+    for (const [index, train] of candidates.entries()) {
+      if (token !== searchToken.current || controller.signal.aborted) return;
 
-        updateCheck(train.uuid, { status: "checking" });
+      updateCheck(train.uuid, { status: "checking" });
 
-        try {
-          const response = await fetch("/api/availability", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: controller.signal,
-            body: JSON.stringify({
-              category: train.category,
-              trainNumber: train.trainNumber,
-              stationStops: train.stationStops,
-              numberOfPassengers,
-              bike,
-              ticketClass,
-            }),
+      try {
+        let response: Response | null = null;
+        let result: {
+          status?: "available" | "unavailable" | "unknown";
+          segments?: AvailabilitySegment[];
+          minimumFreeSeats?: number | null;
+          checkedSegments?: number;
+          unknownSegments?: number;
+          totalSegments?: number;
+          message?: string;
+          error?: string;
+          retryable?: boolean;
+          retryAfterMs?: number;
+        } = {};
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const attemptController = new AbortController();
+          let timedOut = false;
+          const abortAttempt = () =>
+            attemptController.abort(controller.signal.reason);
+          controller.signal.addEventListener("abort", abortAttempt, {
+            once: true,
           });
+          const attemptTimeout = setTimeout(() => {
+            timedOut = true;
+            attemptController.abort(
+              new DOMException("Availability request timed out", "TimeoutError"),
+            );
+          }, AVAILABILITY_TIMEOUT_MS);
 
-          const result = (await response.json()) as {
-            status?: "available" | "unavailable" | "unknown";
-            segments?: AvailabilitySegment[];
-            minimumFreeSeats?: number | null;
-            checkedSegments?: number;
-            unknownSegments?: number;
-            totalSegments?: number;
-            message?: string;
-            error?: string;
-          };
+          try {
+            response = await fetch("/api/availability", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-RailScout-Attempt": String(attempt + 1),
+              },
+              signal: attemptController.signal,
+              body: JSON.stringify({
+                category: train.category,
+                trainNumber: train.trainNumber,
+                stationStops: train.stationStops,
+                numberOfPassengers,
+                bike,
+                ticketClass,
+              }),
+            });
+            result = await response.json();
+          } catch (error) {
+            if (controller.signal.aborted) throw error;
+            if (!timedOut || attempt === 1) throw error;
+            result = {
+              retryable: true,
+              retryAfterMs: AVAILABILITY_RETRY_DELAY_MS,
+            };
+          } finally {
+            clearTimeout(attemptTimeout);
+            controller.signal.removeEventListener("abort", abortAttempt);
+          }
 
-          if (token !== searchToken.current) return;
-          if (!response.ok || result.error) {
-            updateCheck(train.uuid, {
-              status: "error",
-              message: result.error ?? "Sprawdzenie nie powiodło się.",
-            });
-          } else if (result.status === "available") {
-            updateCheck(train.uuid, {
-              status: "available",
-              segments: result.segments ?? [],
-              minimumFreeSeats: result.minimumFreeSeats,
-              checkedSegments: result.checkedSegments,
-              unknownSegments: result.unknownSegments,
-              totalSegments: result.totalSegments,
-            });
-          } else if (result.status === "unknown") {
-            updateCheck(train.uuid, {
-              status: "unknown",
-              message: result.message ?? "Dane o miejscach są chwilowo niedostępne.",
-              checkedSegments: result.checkedSegments,
-              unknownSegments: result.unknownSegments,
-              totalSegments: result.totalSegments,
-            });
-          } else {
-            updateCheck(train.uuid, {
-              status: "unavailable",
-              segments: [],
-              checkedSegments: result.checkedSegments,
-              totalSegments: result.totalSegments,
-            });
-          }
-        } catch (lookupError) {
-          if (
-            lookupError instanceof Error &&
-            lookupError.name === "AbortError"
-          ) {
-            return;
-          }
-          if (token === searchToken.current) {
-            updateCheck(train.uuid, {
-              status: "error",
-              message: "Brak odpowiedzi.",
-            });
-          }
+          if (!result.retryable || attempt === 1) break;
+          await wait(result.retryAfterMs ?? AVAILABILITY_RETRY_DELAY_MS);
+        }
+
+        if (token !== searchToken.current) return;
+        if ((response && !response.ok) || result.error) {
+          updateCheck(train.uuid, {
+            status: "error",
+            message: result.error ?? "Sprawdzenie nie powiodło się.",
+          });
+        } else if (result.status === "available") {
+          updateCheck(train.uuid, {
+            status: "available",
+            segments: result.segments ?? [],
+            minimumFreeSeats: result.minimumFreeSeats,
+            checkedSegments: result.checkedSegments,
+            unknownSegments: result.unknownSegments,
+            totalSegments: result.totalSegments,
+          });
+        } else if (result.status === "unknown" || result.retryable) {
+          updateCheck(train.uuid, {
+            status: "unknown",
+            message:
+              result.message ?? "Dane o miejscach są chwilowo niedostępne.",
+            checkedSegments: result.checkedSegments,
+            unknownSegments: result.unknownSegments,
+            totalSegments: result.totalSegments,
+          });
+        } else {
+          updateCheck(train.uuid, {
+            status: "unavailable",
+            segments: [],
+            checkedSegments: result.checkedSegments,
+            totalSegments: result.totalSegments,
+          });
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+        if (token === searchToken.current) {
+          updateCheck(train.uuid, {
+            status: "error",
+            message: "Brak odpowiedzi po ponownej próbie.",
+          });
+        }
+      }
+
+      if (index < candidates.length - 1) {
+        try {
+          await wait(CONNECTION_CHECK_DELAY_MS);
+        } catch {
+          return;
         }
       }
     }
-
-    await Promise.all(
-      Array.from(
-        { length: Math.min(PARALLEL_CHECKS, candidates.length) },
-        worker,
-      ),
-    );
 
     if (token === searchToken.current && !controller.signal.aborted) {
       setPhase("done");
@@ -813,7 +862,7 @@ export function SeatSweepApp() {
                 </button>
               ))}
               <small>
-                {`${PARALLEL_CHECKS} pociągi równolegle`}
+                Pociągi sprawdzane kolejno
               </small>
             </div>
           )}
