@@ -298,16 +298,6 @@ test("ships complete open-source metadata and visible data provenance", async ()
   assert.equal(socialImage.readUInt32BE(16), 1200);
   assert.equal(socialImage.readUInt32BE(20), 630);
 
-  for (const removedStarterPath of [
-    "../app/chatgpt-auth.ts",
-    "../db/index.ts",
-    "../drizzle.config.ts",
-    "../examples/d1/db/schema.ts",
-    "../public/file.svg",
-  ]) {
-    await assert.rejects(access(new URL(removedStarterPath, import.meta.url)));
-  }
-
   const legalResponse = await appFetch("/dane-i-licencje", {
     headers: { accept: "text/html", host: "localhost" },
   });

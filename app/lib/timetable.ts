@@ -65,7 +65,7 @@ type PlkResponse = {
   routes?: PlkRoute[] | null;
 };
 
-export type TrainResult = {
+type TrainResult = {
   uuid: string;
   category: string;
   trainNumber: string;
@@ -90,7 +90,7 @@ export type TrainResult = {
   bookingUrl: string | null;
 };
 
-export type ScheduleSource = {
+type ScheduleSource = {
   mode: "official-live" | "open-snapshot";
   label: string;
   url: string;

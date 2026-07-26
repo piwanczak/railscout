@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { Unzip, UnzipInflate } from "fflate";
 import { importFeed } from "./import-open-gtfs.mjs";
 
-export const DEFAULT_GTFS_URL = "https://mkuran.pl/gtfs/polish_trains.zip";
+const DEFAULT_GTFS_URL = "https://mkuran.pl/gtfs/polish_trains.zip";
 
 const REQUIRED_FILES = new Set([
   "attributions.txt",
@@ -207,7 +207,7 @@ function writeAllSync(fileDescriptor, chunk) {
   }
 }
 
-export async function extractRequiredGtfs(archivePath, cacheDirectory) {
+async function extractRequiredGtfs(archivePath, cacheDirectory) {
   const extractionDirectory = await mkdtemp(path.join(cacheDirectory, "extract-"));
   const found = new Set();
   let extractedBytes = 0;
