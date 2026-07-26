@@ -4,9 +4,49 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+      time: "04:30"
+      timezone: Europe/Warsaw
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    groups:
+      compatible-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # eslint-config-next currently resolves eslint-plugin-react, whose peer
+      # range ends at ESLint 9. Dependabot should retry after that stack moves.
+      - dependency-name: eslint
+        versions:
+          - ">=10 <11"
+      # The current typescript-eslint parser does not support TypeScript 7 yet.
+      - dependency-name: typescript
+        versions:
+          - ">=7 <8"
+      # Keep Node types aligned with the Node 24 LTS runtime used in CI.
+      - dependency-name: "@types/node"
+        versions:
+          - ">=25 <27"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "04:45"
+      timezone: Europe/Warsaw
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Warsaw
     open-pull-requests-limit: 3
