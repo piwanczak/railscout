@@ -478,15 +478,14 @@ async function lookupInventory(
 
   const allWagons = new Set(stringList(composition.wagony));
   const classWagons = stringList(selectedClass);
-  const unavailableWagons = new Set(
-    stringList(composition.wagonyNiedostepne),
-  );
   const schemes = stringRecord(composition.wagonySchemat);
   const amenities = listRecord(composition.wagonyUdogodnienia);
 
-  let relevantWagons = classWagons.filter(
-    (wagon) => allWagons.has(wagon) && !unavailableWagons.has(wagon),
-  );
+  // e-IC still requests the default wagon when it appears in
+  // `wagonyNiedostepne`. The field controls the official selector UI; it is
+  // not proof that the wagon has no seats. Only the wagon SVG is authoritative
+  // for current seat inventory.
+  let relevantWagons = classWagons.filter((wagon) => allWagons.has(wagon));
   if (input.bike) {
     relevantWagons = relevantWagons.filter((wagon) =>
       amenities[wagon]?.includes("309"),

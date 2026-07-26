@@ -94,6 +94,34 @@ const mockGrmServer = createServer((request, response) => {
     return;
   }
 
+  if (
+    request.url?.includes("/TLK/53170/") &&
+    request.url.includes("/sklad/wbnet/")
+  ) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        wagony: [24, 23, 22, 15, 14, 13, 12, 11, 10, 30, 31],
+        wagonyUdogodnienia: { 22: ["313"], 30: ["313", "315"], 31: ["315"] },
+        wagonyNiedostepne: [22, 23, 24, 10, 11, 12, 13, 14, 30, 15, 31],
+        klasa1: [24, 11, 10],
+        klasa2: [24, 23, 22, 15, 14, 13, 12, 11],
+        wagonySchemat: {
+          24: "1037,WITH_COMPARTMENTS",
+          23: "2221,2033,WITHOUT_COMPARTMENTS",
+          22: "1981,WITH_COMPARTMENTS",
+          15: "1070,WITH_COMPARTMENTS",
+          14: "2221,2033,WITHOUT_COMPARTMENTS",
+          13: "2124,MIXED",
+          12: "1070,WITH_COMPARTMENTS",
+          11: "1035,WITH_COMPARTMENTS",
+          10: "2022,WITH_COMPARTMENTS",
+        },
+      }),
+    );
+    return;
+  }
+
   if (request.url?.includes("/sklad/wbnet/")) {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(composition));
@@ -109,7 +137,8 @@ const mockGrmServer = createServer((request, response) => {
     const isDirectWarsawKrakow = request.url.endsWith("/5100136/5100051");
     const isReferenceTrain = request.url.includes("/IC/5330/");
     const isSingleSeatTrain = request.url.includes("/IC/4444/");
-    const places = isReferenceTrain || isSingleSeatTrain
+    const isKarpatyRegression = request.url.includes("/TLK/53170/24/");
+    const places = isReferenceTrain || isSingleSeatTrain || isKarpatyRegression
       ? [
           { seat: "104", status: "1" },
           { seat: "108", status: "3" },
@@ -557,6 +586,36 @@ test("a one-passenger lookup stops after the first wagon with a free seat", asyn
       (request) => !request.url?.includes("/wagon/svg/wbnet/IC/4444/4/"),
     ),
   );
+});
+
+test("checks a wagon even when e-IC lists it in wagonyNiedostepne", async () => {
+  mockGrmRequests.length = 0;
+  const response = await appFetch("/api/availability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      category: "TLK",
+      trainNumber: "53170/1",
+      stationStops: [
+        { id: 33605, arrival: "2026-07-26T23:32:00+02:00", departure: "2026-07-26T23:32:00+02:00" },
+        { id: 80416, arrival: "2026-07-27T03:35:00+02:00", departure: "2026-07-27T03:35:00+02:00" },
+      ],
+      numberOfPassengers: 1,
+      ticketClass: 2,
+      bike: false,
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.status, "available");
+  assert.deepEqual(payload.segments[0].seats[0], {
+    wagon: "24",
+    seat: "104",
+    label: "Miejsce 104 klasa 2, korytarz, Wolne, niewybrane",
+  });
+  assert.equal(mockGrmRequests.length, 2);
+  assert.match(mockGrmRequests[1].url, /\/wagon\/svg\/wbnet\/TLK\/53170\/24\/1037%2CWITH_COMPARTMENTS\//);
 });
 
 test("availability API checks the full route, derives every pair, and returns a split", async () => {
