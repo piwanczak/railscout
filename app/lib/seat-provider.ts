@@ -62,7 +62,10 @@ type GrmComposition = {
 };
 
 const OFFICIAL_GRM_BASE = "https://api-gateway.intercity.pl/grm";
+const OFFICIAL_EIC_ORIGIN = "https://ebilet.intercity.pl";
+const DEFAULT_EIC_APP_VERSION = "1.5.20";
 const configuredGrmBase = process.env.EIC_GRM_API_URL?.trim();
+const configuredEicAppVersion = process.env.EIC_APP_VERSION?.trim();
 const GRM_BASE = (() => {
   if (!configuredGrmBase) return OFFICIAL_GRM_BASE;
   try {
@@ -74,6 +77,10 @@ const GRM_BASE = (() => {
     return OFFICIAL_GRM_BASE;
   }
 })();
+const EIC_APP_VERSION =
+  configuredEicAppVersion && /^\d+(?:\.\d+){2}$/.test(configuredEicAppVersion)
+    ? configuredEicAppVersion
+    : DEFAULT_EIC_APP_VERSION;
 const MAP_CONCURRENCY = 4;
 const OUTBOUND_CONCURRENCY = 10;
 const MAX_OUTBOUND_WAITERS = 100;
@@ -85,7 +92,43 @@ const inFlightRequests = new Map<string, Promise<unknown>>();
 const outboundWaiters: Array<() => void> = [];
 let activeOutboundRequests = 0;
 
-class ProviderUnavailableError extends Error {}
+class ProviderUnavailableError extends Error {
+  constructor(
+    message: string,
+    readonly status: number | null = null,
+  ) {
+    super(message);
+    this.name = "ProviderUnavailableError";
+  }
+}
+
+function grmHeaders(format: "json" | "text") {
+  return {
+    Accept:
+      format === "json"
+        ? "application/json"
+        : "image/svg+xml,text/plain;q=0.8,*/*;q=0.5",
+    "App-Version": EIC_APP_VERSION,
+    [`App-Version-${EIC_APP_VERSION}`]: "",
+    "Content-Type": "application/json",
+    Origin: OFFICIAL_EIC_ORIGIN,
+    Referer: `${OFFICIAL_EIC_ORIGIN}/`,
+  };
+}
+
+async function fetchWithTimeout(url: string, format: "json" | "text") {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    return await fetch(url, {
+      headers: grmHeaders(format),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function withOutboundSlot<T>(task: () => Promise<T>) {
   if (activeOutboundRequests < OUTBOUND_CONCURRENCY) {
@@ -204,16 +247,7 @@ async function fetchGrm(url: string, format: "json" | "text") {
   const request = withOutboundSlot(async () => {
     let response: Response;
     try {
-      response = await fetch(url, {
-        headers: {
-          Accept:
-            format === "json"
-              ? "application/json"
-              : "image/svg+xml,text/plain;q=0.8,*/*;q=0.5",
-        },
-        cache: "no-store",
-        signal: AbortSignal.timeout(10_000),
-      });
+      response = await fetchWithTimeout(url, format);
     } catch (error) {
       throw new ProviderUnavailableError(
         error instanceof Error
@@ -225,6 +259,13 @@ async function fetchGrm(url: string, format: "json" | "text") {
     if (response.status === 429 || response.status >= 500) {
       throw new ProviderUnavailableError(
         `Seat-map service returned ${response.status}`,
+        response.status,
+      );
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new ProviderUnavailableError(
+        `Seat-map service rejected the request with ${response.status}`,
+        response.status,
       );
     }
     if (!response.ok) return null;
@@ -436,12 +477,30 @@ export async function fetchSeatAvailability(input: SeatInventoryRequest) {
     throw new Error("At least two station stops are required");
   }
   let providerUnavailable = false;
+  const reportLookupFailure = (error: unknown) => {
+    if (!providerUnavailable) {
+      const details = {
+        provider: "PKP Intercity GRM",
+        name: error instanceof Error ? error.name : "UnknownError",
+        message:
+          error instanceof Error ? error.message : "Unexpected provider failure",
+        status:
+          error instanceof ProviderUnavailableError ? error.status : null,
+      };
+      if (error instanceof ProviderUnavailableError) {
+        console.warn("Seat inventory provider unavailable", details);
+      } else {
+        console.error("Seat inventory lookup failed", details);
+      }
+    }
+    providerUnavailable = true;
+  };
 
   let directInventory = unknownLeg();
   try {
     directInventory = await lookupInventory(input, first, last);
   } catch (error) {
-    if (error instanceof ProviderUnavailableError) providerUnavailable = true;
+    reportLookupFailure(error);
   }
   const directOutcome = outcomeFor(
     directInventory,
@@ -470,7 +529,7 @@ export async function fetchSeatAvailability(input: SeatInventoryRequest) {
         try {
           return await lookupInventory(input, from, input.stationStops[index + 1]);
         } catch (error) {
-          if (error instanceof ProviderUnavailableError) providerUnavailable = true;
+          reportLookupFailure(error);
           return unknownLeg();
         }
       },

@@ -52,6 +52,8 @@ Copy `.env.example` to `.env.local` and set only the values you need:
   from PKP PLK and keep it server-side.
 - `EIC_GRM_API_URL` overrides the e-IC seat-map root for tests or compatible
   development services. Production defaults to the current Intercity gateway.
+- `EIC_APP_VERSION` overrides the tested e-IC request-contract version when the
+  official portal rolls forward before a RailScout release.
 
 Without `PLK_API_KEY`, the app uses the bundled snapshot only for the validity
 window recorded in that file. Download and import the current feed with:
