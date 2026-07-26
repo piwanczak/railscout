@@ -40,6 +40,7 @@ const composition = {
 const mockGrmServer = createServer((request, response) => {
   mockGrmRequests.push({
     url: request.url,
+    receivedAt: Date.now(),
     appVersion: request.headers["app-version"],
     appVersionMarker: request.headers["app-version-1.5.20"],
     contentType: request.headers["content-type"],
@@ -53,6 +54,14 @@ const mockGrmServer = createServer((request, response) => {
   if (request.url?.includes("/IC/9999/")) {
     response.writeHead(503, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: "maintenance" }));
+    return;
+  }
+
+  if (request.url?.includes("/IC/6666/")) {
+    setTimeout(() => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(composition));
+    }, 250);
     return;
   }
 
@@ -107,6 +116,8 @@ assert.ok(mockGrmAddress && typeof mockGrmAddress !== "string");
 process.env.EIC_GRM_API_URL =
   `http://127.0.0.1:${mockGrmAddress.port}/grm`;
 process.env.EIC_GRM_API_TOKEN = "test-relay-token-with-at-least-32-characters";
+process.env.EIC_GRM_REQUEST_TIMEOUT_MS = "80";
+process.env.EIC_GRM_MIN_INTERVAL_MS = "5";
 after(
   () =>
     new Promise((resolve, reject) =>
@@ -168,6 +179,7 @@ test("ships independent data and no consumer-site endpoint", async () => {
     trainsRoute,
     seatsRoute,
     seatProvider,
+    seatApp,
     timetable,
   ] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -177,6 +189,7 @@ test("ships independent data and no consumer-site endpoint", async () => {
     readFile(new URL("../app/api/trains/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/availability/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/seat-provider.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/seat-sweep-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/data/ic-timetable.json", import.meta.url), "utf8"),
   ]);
 
@@ -200,6 +213,9 @@ test("ships independent data and no consumer-site endpoint", async () => {
     /placefinder\.pl|\/api\/koleo/i,
   );
   assert.match(seatProvider, /api-gateway\.intercity\.pl\/grm/);
+  assert.match(seatProvider, /OUTBOUND_INTERVAL_MILLISECONDS/);
+  assert.match(seatApp, /AVAILABILITY_RETRY_DELAY_MS = 1_000/);
+  assert.match(seatApp, /for \(const \[index, train\] of candidates\.entries\(\)\)/);
   await assert.rejects(access(previewRoot));
   await access(new URL("../public/og.png", import.meta.url));
   await access(new URL("../app/lib/timetable.ts", import.meta.url));
@@ -524,6 +540,12 @@ test("availability API checks the full route, derives every pair, and returns a 
   assert.equal(payload.minimumFreeSeats, 1);
   assert.equal(mockGrmRequests.length, 6);
   assert.ok(
+    mockGrmRequests.slice(1).every(
+      (request, index) =>
+        request.receivedAt - mockGrmRequests[index].receivedAt >= 3,
+    ),
+  );
+  assert.ok(
     mockGrmRequests.some((request) =>
       request.url?.includes("/sklad/wbnet/IC/1234/202607261600/5100136/202607261300/5100051"),
     ),
@@ -556,6 +578,36 @@ test("carrier outages stay unknown instead of becoming false sold-out results", 
   assert.equal(payload.unknownSegments, 3);
   assert.equal(payload.totalSegments, 3);
   assert.match(payload.message, /PKP Intercity/i);
+  assert.equal(payload.retryable, true);
+  assert.equal(payload.retryAfterMs, 1_000);
+  assert.equal(mockGrmRequests.length, 1);
+});
+
+test("slow carrier calls stop at the upstream deadline and ask for one fresh retry", async () => {
+  mockGrmRequests.length = 0;
+  const startedAt = Date.now();
+  const response = await appFetch("/api/availability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      category: "IC",
+      trainNumber: "6666",
+      stationStops: [
+        { id: 33605, arrival: "2026-07-27T10:08:00+02:00", departure: "2026-07-27T10:08:00+02:00" },
+        { id: 80416, arrival: "2026-07-27T14:39:00+02:00", departure: "2026-07-27T14:39:00+02:00" },
+      ],
+      numberOfPassengers: 1,
+      ticketClass: 2,
+      bike: false,
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.status, "unknown");
+  assert.equal(payload.retryable, true);
+  assert.equal(payload.retryAfterMs, 1_000);
+  assert.ok(Date.now() - startedAt < 500);
   assert.equal(mockGrmRequests.length, 1);
 });
 

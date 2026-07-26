@@ -56,6 +56,10 @@ Copy `.env.example` to `.env.local` and set only the values you need:
   first-party RailScout relay described below.
 - `EIC_APP_VERSION` overrides the tested e-IC request-contract version when the
   official portal rolls forward before a RailScout release.
+- `EIC_GRM_REQUEST_TIMEOUT_MS` caps each individual seat-map request; the
+  production-safe default is 4 seconds.
+- `EIC_GRM_MIN_INTERVAL_MS` spaces upstream seat-map calls; the default is one
+  call every 500 milliseconds.
 
 Without `PLK_API_KEY`, the app uses the bundled snapshot only for the validity
 window recorded in that file. Download and import the current feed with:

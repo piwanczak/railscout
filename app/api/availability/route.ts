@@ -55,6 +55,18 @@ function validStationPath(
 }
 
 export async function POST(request: Request) {
+  const deadline = new AbortController();
+  const abortFromClient = () => deadline.abort(request.signal.reason);
+  const timeout = setTimeout(
+    () =>
+      deadline.abort(
+        new DOMException("Availability deadline exceeded", "TimeoutError"),
+      ),
+    10_000,
+  );
+  if (request.signal.aborted) abortFromClient();
+  else request.signal.addEventListener("abort", abortFromClient, { once: true });
+
   try {
     const payload = await readJsonBody<AvailabilityPayload>(request);
     const ticketClass = payload.ticketClass === 1 ? 1 : 2;
@@ -76,16 +88,19 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await fetchSeatAvailability({
-      train: {
-        number: payload.trainNumber,
-        category: payload.category,
+    const result = await fetchSeatAvailability(
+      {
+        train: {
+          number: payload.trainNumber,
+          category: payload.category,
+        },
+        stationStops: payload.stationStops,
+        numberOfPassengers,
+        ticketClass,
+        bike: Boolean(payload.bike),
       },
-      stationStops: payload.stationStops,
-      numberOfPassengers,
-      ticketClass,
-      bike: Boolean(payload.bike),
-    });
+      deadline.signal,
+    );
     return jsonResponse(result);
   } catch (error) {
     if (error instanceof HttpInputError) {
@@ -96,5 +111,8 @@ export async function POST(request: Request) {
       { error: "Nie udało się sprawdzić dostępności miejsc." },
       { status: 502 },
     );
+  } finally {
+    clearTimeout(timeout);
+    request.signal.removeEventListener("abort", abortFromClient);
   }
 }
