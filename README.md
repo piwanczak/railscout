@@ -24,7 +24,7 @@ the source of truth during purchase.
 
 ## Requirements
 
-- Node.js 22.13 or newer
+- Node.js 24 LTS recommended (22.13 or newer is supported)
 - npm 10
 
 ## Local development
@@ -52,6 +52,8 @@ Copy `.env.example` to `.env.local` and set only the values you need:
   from PKP PLK and keep it server-side.
 - `EIC_GRM_API_URL` overrides the e-IC seat-map root for tests or compatible
   development services. Production defaults to the current Intercity gateway.
+- `EIC_GRM_API_TOKEN` authenticates requests when the URL points to the
+  first-party RailScout relay described below.
 - `EIC_APP_VERSION` overrides the tested e-IC request-contract version when the
   official portal rolls forward before a RailScout release.
 
@@ -86,6 +88,38 @@ snapshot with less than seven days of validity remaining; set
 Hosted Sites releases are immutable, so a newly committed snapshot becomes live
 there with the next private Sites deployment. Supplying `PLK_API_KEY` avoids that
 deployment cadence by using the official live timetable API at runtime.
+
+## Seat inventory from Sites
+
+Intercity currently returns HTTP 520 to seat-map requests from the Cloudflare
+egress used by Sites, although the same request succeeds from the local Node
+server. Browser-side requests are not a fallback because the official gateway
+accepts the e-IC web origin only.
+
+The repository therefore includes a dependency-free, first-party relay for a
+small Node container outside Cloudflare. It is an allowlisted gateway, not a
+general proxy: it accepts only the composition and wagon-map paths RailScout
+uses, requires a bearer token, strips that token before contacting Intercity,
+and applies time, size, concurrency, and rate limits.
+
+Run it locally with a random secret of at least 32 characters:
+
+```bash
+RAILSCOUT_RELAY_TOKEN=replace-with-a-random-secret npm run relay:start
+```
+
+The repository `Dockerfile` builds only this relay and is ready for a container
+host. After deployment, configure the private Sites project with both values
+and deploy a new immutable version:
+
+```text
+EIC_GRM_API_URL=https://your-relay.example/grm
+EIC_GRM_API_TOKEN=the-same-random-secret
+```
+
+The unauthenticated `GET /healthz` route is intended only for platform health
+checks. Keep the relay URL out of browser code and rotate the token if it is
+ever exposed.
 
 ## Verification
 

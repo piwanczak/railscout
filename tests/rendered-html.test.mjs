@@ -43,6 +43,7 @@ const mockGrmServer = createServer((request, response) => {
     appVersion: request.headers["app-version"],
     appVersionMarker: request.headers["app-version-1.5.20"],
     contentType: request.headers["content-type"],
+    authorization: request.headers.authorization,
     origin: request.headers.origin,
     referer: request.headers.referer,
   });
@@ -103,6 +104,7 @@ const mockGrmAddress = mockGrmServer.address();
 assert.ok(mockGrmAddress && typeof mockGrmAddress !== "string");
 process.env.EIC_GRM_API_URL =
   `http://127.0.0.1:${mockGrmAddress.port}/grm`;
+process.env.EIC_GRM_API_TOKEN = "test-relay-token-with-at-least-32-characters";
 after(
   () =>
     new Promise((resolve, reject) =>
@@ -477,6 +479,8 @@ test("availability API returns the exact reference seat from official-style GRM 
         request.appVersion === "1.5.20" &&
         request.appVersionMarker === "" &&
         request.contentType === "application/json" &&
+        request.authorization ===
+          "Bearer test-relay-token-with-at-least-32-characters" &&
         request.origin === "https://ebilet.intercity.pl" &&
         request.referer === "https://ebilet.intercity.pl/",
     ),
@@ -686,7 +690,9 @@ test("local preview serves the hydrated UI and seat API on one origin", async (c
   );
   assert.equal(pageResponse.status, 200);
   const html = await pageResponse.text();
-  const clientEntry = html.match(/\/assets\/index-[^"']+\.js/)?.[0];
+  const clientEntry = html.match(
+    /\/(?:assets|_next\/static\/chunks)\/[A-Za-z0-9._~-]+\.js/,
+  )?.[0];
   assert.ok(clientEntry, "Rendered page should reference its hydration bundle");
 
   const assetResponse = await fetch(`http://127.0.0.1:${port}${clientEntry}`);

@@ -27,7 +27,8 @@
     "build": "vinext build",
     "start": "node scripts/preview-server.mjs",
     "preview": "npm run build && npm run start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/gtfs-refresh.test.mjs",
+    "relay:start": "node scripts/grm-relay.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/gtfs-refresh.test.mjs tests/grm-relay.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern app/data",
     "licenses:check": "node scripts/check-licenses.mjs",
@@ -45,7 +46,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.47.0",
     "@tailwindcss/postcss": "4.3.3",
-    "@types/node": "22.19.19",
+    "@types/node": "24.13.3",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.4",
@@ -56,7 +57,7 @@
     "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
-    "vinext": "0.0.50",
+    "vinext": "0.2.1",
     "vite": "8.1.5",
     "wrangler": "4.114.0"
   },

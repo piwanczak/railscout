@@ -65,6 +65,7 @@ const OFFICIAL_GRM_BASE = "https://api-gateway.intercity.pl/grm";
 const OFFICIAL_EIC_ORIGIN = "https://ebilet.intercity.pl";
 const DEFAULT_EIC_APP_VERSION = "1.5.20";
 const configuredGrmBase = process.env.EIC_GRM_API_URL?.trim();
+const configuredGrmToken = process.env.EIC_GRM_API_TOKEN?.trim();
 const configuredEicAppVersion = process.env.EIC_APP_VERSION?.trim();
 const GRM_BASE = (() => {
   if (!configuredGrmBase) return OFFICIAL_GRM_BASE;
@@ -81,6 +82,10 @@ const EIC_APP_VERSION =
   configuredEicAppVersion && /^\d+(?:\.\d+){2}$/.test(configuredEicAppVersion)
     ? configuredEicAppVersion
     : DEFAULT_EIC_APP_VERSION;
+const GRM_API_TOKEN =
+  configuredGrmToken && configuredGrmToken.length >= 32
+    ? configuredGrmToken
+    : null;
 const MAP_CONCURRENCY = 4;
 const OUTBOUND_CONCURRENCY = 10;
 const MAX_OUTBOUND_WAITERS = 100;
@@ -103,7 +108,7 @@ class ProviderUnavailableError extends Error {
 }
 
 function grmHeaders(format: "json" | "text") {
-  return {
+  const headers: Record<string, string> = {
     Accept:
       format === "json"
         ? "application/json"
@@ -114,6 +119,8 @@ function grmHeaders(format: "json" | "text") {
     Origin: OFFICIAL_EIC_ORIGIN,
     Referer: `${OFFICIAL_EIC_ORIGIN}/`,
   };
+  if (GRM_API_TOKEN) headers.Authorization = `Bearer ${GRM_API_TOKEN}`;
+  return headers;
 }
 
 async function fetchWithTimeout(url: string, format: "json" | "text") {
