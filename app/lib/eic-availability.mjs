@@ -102,7 +102,7 @@ function seatKey(seat) {
 /**
  * @param {ExactSeat[][]} seatLists
  */
-export function intersectExactSeats(seatLists) {
+function intersectExactSeats(seatLists) {
   if (seatLists.length === 0) return [];
   const remaining = new Map(
     seatLists[0].map((seat) => [seatKey(seat), seat]),

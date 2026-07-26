@@ -2,7 +2,7 @@ import stationRowsJson from "../data/eic-stations.json";
 
 type EicStationRow = [plkId: number, searchCode: number, availabilityCode: number];
 
-export type EicStationCodes = {
+type EicStationCodes = {
   searchCode: number;
   availabilityCode: number;
 };
@@ -53,10 +53,6 @@ export function normaliseEicCategory(value: string) {
 
 export function normaliseEicTrainNumber(value: string) {
   return value.match(/\d+/)?.[0] ?? value.trim();
-}
-
-export function formatEicDateTime(value: string) {
-  return warsawParts(value)?.dateTime ?? "";
 }
 
 export function formatEicCompactDateTime(value: string) {
