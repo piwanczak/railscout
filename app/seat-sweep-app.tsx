@@ -11,6 +11,7 @@ type Station = {
 
 type Train = {
   uuid: string;
+  category: string;
   trainNumber: string;
   trainName: string;
   departure: string;
@@ -25,26 +26,20 @@ type Train = {
   arrivalTrack: string;
   stops: number;
   stationIds: number[];
-  bookingUrl: string;
+  stationStops: Array<{
+    id: number;
+    arrival: string;
+    departure: string;
+  }>;
+  bookingUrl: string | null;
 };
 
-type Ticket = {
+type AvailabilitySegment = {
   from: number;
   to: number;
   timeFrom: string;
   timeTo: string;
-  price: number;
-  seated: boolean;
-  class: number;
-  wagon: string;
-  seat: string;
-  hasBike: boolean;
-  hasQuiet: boolean;
-};
-
-type PassengerResult = {
-  passengerIndex: number;
-  tickets: Ticket[];
+  occupancyPercent: number;
 };
 
 type CheckState = {
@@ -53,9 +48,13 @@ type CheckState = {
     | "checking"
     | "available"
     | "unavailable"
-    | "not-connected"
+    | "unknown"
     | "error";
-  passengers?: PassengerResult[];
+  segments?: AvailabilitySegment[];
+  peakOccupancy?: number | null;
+  checkedSegments?: number;
+  unknownSegments?: number;
+  totalSegments?: number;
   message?: string;
 };
 
@@ -68,7 +67,7 @@ type ScheduleSource = {
 };
 
 type SearchPhase = "idle" | "loading-trains" | "checking" | "done";
-type SortKey = "recommended" | "departure" | "price" | "switches";
+type SortKey = "recommended" | "departure" | "occupancy" | "switches";
 
 const PARALLEL_CHECKS = 4;
 
@@ -123,29 +122,13 @@ function formatDuration(minutes: number) {
   return hours > 0 ? `${hours} h ${rest} min` : `${rest} min`;
 }
 
-function formatMoney(grosze: number) {
-  return new Intl.NumberFormat("pl-PL", {
-    style: "currency",
-    currency: "PLN",
-  }).format(grosze / 100);
-}
-
-function totalPrice(check?: CheckState) {
-  if (!check?.passengers) return Number.POSITIVE_INFINITY;
-  return check.passengers.reduce(
-    (total, passenger) =>
-      total + passenger.tickets.reduce((sum, ticket) => sum + ticket.price, 0),
-    0,
-  );
-}
-
 function seatSwitches(check?: CheckState) {
-  if (!check?.passengers?.length) return Number.POSITIVE_INFINITY;
-  return Math.max(
-    ...check.passengers.map((passenger) =>
-      Math.max(0, passenger.tickets.length - 1),
-    ),
-  );
+  if (!check?.segments?.length) return Number.POSITIVE_INFINITY;
+  return Math.max(0, check.segments.length - 1);
+}
+
+function peakOccupancy(check?: CheckState) {
+  return check?.peakOccupancy ?? Number.POSITIVE_INFINITY;
 }
 
 function statusRank(check?: CheckState) {
@@ -153,8 +136,8 @@ function statusRank(check?: CheckState) {
     available: 0,
     checking: 1,
     queued: 2,
-    "not-connected": 3,
-    unavailable: 4,
+    unavailable: 3,
+    unknown: 4,
     error: 5,
   }[check?.status ?? "queued"];
 }
@@ -165,24 +148,26 @@ function pluralConnections(count: number) {
   return "połączeń";
 }
 
+function availabilityLabel(occupancyPercent: number) {
+  if (occupancyPercent <= 40) return "Dużo miejsc";
+  if (occupancyPercent <= 80) return "Miejsca dostępne";
+  if (occupancyPercent < 100) return "Ostatnie miejsca";
+  return "Brak miejsc";
+}
+
 export function SeatSweepApp() {
   const [stations, setStations] = useState<Station[]>([]);
   const [originName, setOriginName] = useState("Warszawa Centralna");
   const [destinationName, setDestinationName] = useState("Kraków Główny");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
-  const [passengers, setPassengers] = useState(1);
   const [ticketClass, setTicketClass] = useState<1 | 2>(2);
-  const [quietZone, setQuietZone] = useState(false);
   const [bike, setBike] = useState(false);
   const [phase, setPhase] = useState<SearchPhase>("idle");
   const [trains, setTrains] = useState<Train[]>([]);
   const [checks, setChecks] = useState<Record<string, CheckState>>({});
   const [sortKey, setSortKey] = useState<SortKey>("recommended");
   const [error, setError] = useState("");
-  const [availabilityConfigured, setAvailabilityConfigured] = useState<
-    boolean | null
-  >(null);
   const [scheduleSource, setScheduleSource] = useState<ScheduleSource | null>(
     null,
   );
@@ -234,15 +219,18 @@ export function SeatSweepApp() {
   const progress = useMemo(() => {
     const values = Object.values(checks);
     const finished = values.filter((check) =>
-      ["available", "unavailable", "not-connected", "error"].includes(
+      ["available", "unavailable", "unknown", "error"].includes(
         check.status,
       ),
     ).length;
     const available = values.filter(
       (check) => check.status === "available",
     ).length;
+    const unresolved = values.filter((check) =>
+      ["unknown", "error"].includes(check.status),
+    ).length;
     const active = values.filter((check) => check.status === "checking").length;
-    return { finished, available, active, total: trains.length };
+    return { finished, available, unresolved, active, total: trains.length };
   }, [checks, trains.length]);
 
   const sortedTrains = useMemo(() => {
@@ -255,17 +243,14 @@ export function SeatSweepApp() {
         return Date.parse(left.departure) - Date.parse(right.departure);
       }
 
-      if (sortKey === "price") {
-        return (
-          totalPrice(leftCheck) - totalPrice(rightCheck) ||
-          Date.parse(left.departure) - Date.parse(right.departure)
-        );
+      if (sortKey === "occupancy") {
+        return peakOccupancy(leftCheck) - peakOccupancy(rightCheck);
       }
 
       if (sortKey === "switches") {
         return (
           seatSwitches(leftCheck) - seatSwitches(rightCheck) ||
-          totalPrice(leftCheck) - totalPrice(rightCheck) ||
+          peakOccupancy(leftCheck) - peakOccupancy(rightCheck) ||
           Date.parse(left.departure) - Date.parse(right.departure)
         );
       }
@@ -273,7 +258,7 @@ export function SeatSweepApp() {
       return (
         statusRank(leftCheck) - statusRank(rightCheck) ||
         seatSwitches(leftCheck) - seatSwitches(rightCheck) ||
-        totalPrice(leftCheck) - totalPrice(rightCheck) ||
+        peakOccupancy(leftCheck) - peakOccupancy(rightCheck) ||
         Date.parse(left.departure) - Date.parse(right.departure)
       );
     });
@@ -312,19 +297,24 @@ export function SeatSweepApp() {
             signal: controller.signal,
             body: JSON.stringify({
               uuid: train.uuid,
+              category: train.category,
               trainNumber: train.trainNumber,
-              stationIds: train.stationIds,
+              stationStops: train.stationStops,
               startDateTime: train.departure,
-              numberOfPassengers: passengers,
+              arrivalDateTime: train.arrival,
               bike,
-              quietZone,
               ticketClass,
             }),
           });
 
           const result = (await response.json()) as {
-            status?: "available" | "unavailable";
-            passengers?: PassengerResult[];
+            status?: "available" | "unavailable" | "unknown";
+            segments?: AvailabilitySegment[];
+            peakOccupancy?: number | null;
+            checkedSegments?: number;
+            unknownSegments?: number;
+            totalSegments?: number;
+            message?: string;
             error?: string;
           };
 
@@ -337,10 +327,27 @@ export function SeatSweepApp() {
           } else if (result.status === "available") {
             updateCheck(train.uuid, {
               status: "available",
-              passengers: result.passengers ?? [],
+              segments: result.segments ?? [],
+              peakOccupancy: result.peakOccupancy,
+              checkedSegments: result.checkedSegments,
+              unknownSegments: result.unknownSegments,
+              totalSegments: result.totalSegments,
+            });
+          } else if (result.status === "unknown") {
+            updateCheck(train.uuid, {
+              status: "unknown",
+              message: result.message ?? "Dane o miejscach są chwilowo niedostępne.",
+              checkedSegments: result.checkedSegments,
+              unknownSegments: result.unknownSegments,
+              totalSegments: result.totalSegments,
             });
           } else {
-            updateCheck(train.uuid, { status: "unavailable", passengers: [] });
+            updateCheck(train.uuid, {
+              status: "unavailable",
+              segments: [],
+              checkedSegments: result.checkedSegments,
+              totalSegments: result.totalSegments,
+            });
           }
         } catch (lookupError) {
           if (
@@ -403,7 +410,6 @@ export function SeatSweepApp() {
     setPhase("loading-trains");
     setTrains([]);
     setChecks({});
-    setAvailabilityConfigured(null);
     setScheduleSource(null);
     setSourceWarning("");
     setSearchedRoute({ origin, destination, dateTime });
@@ -417,12 +423,10 @@ export function SeatSweepApp() {
           startStationId: origin.id,
           endStationId: destination.id,
           startDateTime: dateTime,
-          numberOfPassengers: passengers,
         }),
       });
       const result = (await response.json()) as {
         trains?: Train[];
-        availabilityConfigured?: boolean;
         source?: ScheduleSource;
         warning?: string;
         error?: string;
@@ -433,8 +437,6 @@ export function SeatSweepApp() {
       }
 
       const candidates = result.trains ?? [];
-      const canCheckSeats = Boolean(result.availabilityConfigured);
-      setAvailabilityConfigured(canCheckSeats);
       setScheduleSource(result.source ?? null);
       setSourceWarning(result.warning ?? "");
       if (candidates.length === 0) {
@@ -448,14 +450,10 @@ export function SeatSweepApp() {
         Object.fromEntries(
           candidates.map((train) => [
             train.uuid,
-            { status: canCheckSeats ? "queued" : "not-connected" },
+            { status: "queued" },
           ]),
         ),
       );
-      if (!canCheckSeats) {
-        setPhase("done");
-        return;
-      }
       setPhase("checking");
 
       void checkEveryTrain(
@@ -492,28 +490,25 @@ export function SeatSweepApp() {
         </a>
         <div className="topbar-note">
           <span className="live-dot" aria-hidden="true" />
-          {availabilityConfigured
-            ? "Autoryzowane dane miejsc: połączone"
-            : "Rozkład: otwarte dane kolejowe"}
+          Rozkład i miejsca w jednym widoku
         </div>
       </header>
 
       <section className={`hero ${showResults ? "hero-compact" : ""}`} id="top">
         <div className="hero-copy">
-          <p className="eyebrow">LOKALNY WYSZUKIWACZ MIEJSC</p>
+          <p className="eyebrow">WYSZUKIWARKA DOSTĘPNOŚCI</p>
           <h1>
             Jedno wyszukanie.
             <br />
-            <em>Wszystkie miejsca.</em>
+            <em>Wszystkie kombinacje.</em>
           </h1>
           <p className="hero-lede">
-            RailScout ma własny silnik podziałów trasy i niezależny rozkład.
-            Dostępność miejsc jest sprawdzana wyłącznie po podłączeniu
-            autoryzowanego źródła — bez scrapingu cudzej usługi.
+            RailScout sprawdza każdy widoczny pociąg i każdy możliwy podział
+            trasy, a potem pokazuje wariant z najmniejszą liczbą zmian.
           </p>
           <div className="promise-row" aria-label="Zakres wyszukiwania">
             <span>Każdy widoczny pociąg</span>
-            <span>Każdy sensowny podział</span>
+            <span>Każdy możliwy podział</span>
             <span>Jeden czytelny ranking</span>
           </div>
         </div>
@@ -521,8 +516,8 @@ export function SeatSweepApp() {
         {!showResults && (
           <div className="scan-preview" aria-label="Podgląd działania">
             <div className="preview-heading">
-              <span>Niezależny pipeline</span>
-              <b>bez PlaceFinder</b>
+              <span>Pełny skan</span>
+              <b>wszystkie pociągi</b>
             </div>
             <div className="rail-line" aria-hidden="true">
               <i />
@@ -532,18 +527,18 @@ export function SeatSweepApp() {
             <div className="preview-list">
               <div>
                 <small>IC 8300 · 11:40</small>
-                <strong className="preview-found">Rozkład gotowy</strong>
+                <strong className="preview-found">Trasa bez podziału</strong>
               </div>
               <div>
                 <small>EIP 5302 · 13:44</small>
-                <strong className="preview-checking">Wszystkie segmenty</strong>
+                <strong className="preview-checking">Podziały trasy</strong>
               </div>
               <div>
                 <small>IC 8352 · 14:40</small>
-                <strong className="preview-queued">Własny ranking</strong>
+                <strong className="preview-queued">Najlepszy wariant</strong>
               </div>
             </div>
-            <p>Jedna autoryzowana odpowiedź zasila wszystkie możliwe podziały trasy.</p>
+            <p>Dostępność całej trasy i odcinków w jednym wyniku.</p>
           </div>
         )}
       </section>
@@ -613,20 +608,6 @@ export function SeatSweepApp() {
               />
             </label>
             <label className="field">
-              <span>Pasażerowie</span>
-              <input
-                type="number"
-                min="1"
-                max="6"
-                value={passengers}
-                onChange={(event) =>
-                  setPassengers(
-                    Math.min(6, Math.max(1, Number(event.target.value))),
-                  )
-                }
-              />
-            </label>
-            <label className="field">
               <span>Klasa</span>
               <select
                 value={ticketClass}
@@ -642,14 +623,6 @@ export function SeatSweepApp() {
 
           <div className="search-actions">
             <div className="preference-row">
-              <label className="check-pill">
-                <input
-                  type="checkbox"
-                  checked={quietZone}
-                  onChange={(event) => setQuietZone(event.target.checked)}
-                />
-                <span>Cicha strefa</span>
-              </label>
               <label className="check-pill">
                 <input
                   type="checkbox"
@@ -718,9 +691,9 @@ export function SeatSweepApp() {
                   />
                 </div>
                 <small>
-                  {availabilityConfigured
-                    ? `${progress.available} ${pluralConnections(progress.available)} z miejscami${progress.active > 0 ? ` · ${progress.active} aktywne` : ""}`
-                    : "Dostępność miejsc czeka na autoryzowane źródło"}
+                  {phase === "done" && progress.unresolved > 0
+                    ? `${progress.available} potwierdzonych · ${progress.unresolved} bez danych`
+                    : `${progress.available} ${pluralConnections(progress.available)} z miejscami${progress.active > 0 ? ` · ${progress.active} aktywne` : ""}`}
                 </small>
               </div>
             )}
@@ -748,7 +721,7 @@ export function SeatSweepApp() {
                 [
                   ["recommended", "Najlepsze"],
                   ["departure", "Najwcześniej"],
-                  ["price", "Cena"],
+                  ["occupancy", "Najwięcej miejsc"],
                   ["switches", "Najmniej zmian"],
                 ] as Array<[SortKey, string]>
               ).map(([value, label]) => (
@@ -762,9 +735,7 @@ export function SeatSweepApp() {
                 </button>
               ))}
               <small>
-                {availabilityConfigured
-                  ? `${PARALLEL_CHECKS} sprawdzenia równolegle`
-                  : "tryb rozkładu"}
+                {`${PARALLEL_CHECKS} pociągi równolegle`}
               </small>
             </div>
           )}
@@ -787,18 +758,26 @@ export function SeatSweepApp() {
                 check={checks[train.uuid] ?? { status: "queued" }}
                 rank={index + 1}
                 stationById={stationById}
-                passengerCount={passengers}
+                ticketClass={ticketClass}
               />
             ))}
           </div>
 
-          {availabilityConfigured &&
-            phase === "done" &&
+          {phase === "done" &&
             trains.length > 0 &&
             progress.available === 0 && (
             <div className="empty-result">
-              <strong>Nie znaleźliśmy siedzącej kombinacji.</strong>
-              <p>Spróbuj wcześniejszej godziny, innej klasy albo wyłącz dodatkowe preferencje.</p>
+              {progress.unresolved > 0 ? (
+                <>
+                  <strong>Dostępności miejsc nie udało się teraz potwierdzić.</strong>
+                  <p>Rozkład jest gotowy. Odśwież wyszukiwanie, gdy dane będą znów dostępne.</p>
+                </>
+              ) : (
+                <>
+                  <strong>Brak kombinacji z dostępnymi miejscami.</strong>
+                  <p>Sprawdź inną klasę, godzinę albo połączenie.</p>
+                </>
+              )}
             </div>
             )}
         </section>
@@ -806,8 +785,8 @@ export function SeatSweepApp() {
 
       <footer>
         <p>
-          RailScout nie wysyła żadnych zapytań do PlaceFinder. Rozkład pochodzi
-          z otwartych danych kolejowych; dostępność zawsze potwierdź u przewoźnika.
+          Rozkład i dostępność mają charakter informacyjny. Szczegóły zakupu
+          potwierdź w e-IC.
         </p>
         <span className="footer-links">
           <a
@@ -831,24 +810,24 @@ function TrainCard({
   check,
   rank,
   stationById,
-  passengerCount,
+  ticketClass,
 }: {
   train: Train;
   check: CheckState;
   rank: number;
   stationById: Map<number, Station>;
-  passengerCount: number;
+  ticketClass: 1 | 2;
 }) {
-  const price = totalPrice(check);
   const switches = seatSwitches(check);
   const isAvailable = check.status === "available";
   const isBest = rank === 1 && isAvailable;
+  const occupancy = Math.round(check.peakOccupancy ?? 0);
   const routeLabel =
     switches === 0
-      ? "Bez zmiany fotela"
+      ? "Bez podziału trasy"
       : switches === 1
-        ? "1 zmiana fotela"
-        : `${switches} zmiany fotela`;
+        ? "1 podział trasy"
+        : `${switches} podziały trasy`;
 
   return (
     <article className={`train-card status-${check.status} ${isBest ? "best" : ""}`}>
@@ -894,18 +873,21 @@ function TrainCard({
           {check.status === "unavailable" && (
             <span className="status-badge unavailable">Brak kombinacji</span>
           )}
-          {check.status === "not-connected" && (
-            <span className="status-badge not-connected">Rozkład gotowy</span>
+          {check.status === "unknown" && (
+            <span className="status-badge unknown">Brak danych</span>
           )}
           {check.status === "error" && (
             <span className="status-badge error">Nie sprawdzono</span>
           )}
           {isAvailable && (
             <>
-              <span className="status-badge available">Miejsca znalezione</span>
-              <strong className="result-price">{formatMoney(price)}</strong>
+              <span className="status-badge available">
+                {availabilityLabel(occupancy)}
+              </span>
+              <strong className="result-price">do {occupancy}% zajętości</strong>
               <small>
-                łącznie · {passengerCount} {passengerCount === 1 ? "osoba" : "osoby"}
+                {ticketClass} klasa · {check.checkedSegments ?? 0}/
+                {check.totalSegments ?? 0} odcinków sprawdzonych
               </small>
             </>
           )}
@@ -918,74 +900,60 @@ function TrainCard({
         </div>
       )}
 
-      {check.status === "not-connected" && (
+      {!isAvailable && train.bookingUrl && check.status !== "checking" && (
         <div className="availability-action">
-          <span>
-            Live inventory nie jest publicznym elementem rozkładu. Podłączymy go
-            dopiero przez autoryzowany interfejs przewoźnika lub sprzedawcy.
-          </span>
+          <span>{train.category} {train.trainNumber} · odjazd {formatTime(train.departure)}</span>
           <a href={train.bookingUrl} target="_blank" rel="noreferrer">
-            Sprawdź teraz w e-IC →
+            Pokaż ten pociąg w e-IC →
           </a>
         </div>
       )}
 
-      {isAvailable && check.passengers && (
+      {isAvailable && check.segments && (
         <details className="seat-details" open={isBest}>
           <summary>
             <span>{routeLabel}</span>
             <span>Zobacz podział trasy</span>
           </summary>
           <div className="passenger-list">
-            {check.passengers.map((passenger) => (
-              <section key={passenger.passengerIndex} className="passenger-route">
-                {check.passengers && check.passengers.length > 1 && (
-                  <h3>Pasażer {passenger.passengerIndex}</h3>
-                )}
-                <div className="segment-list">
-                  {passenger.tickets.map((ticket, ticketIndex) => {
-                    const from = stationById.get(ticket.from)?.name ?? `Stacja ${ticket.from}`;
-                    const to = stationById.get(ticket.to)?.name ?? `Stacja ${ticket.to}`;
-                    return (
-                      <div className="segment" key={`${ticket.from}-${ticket.to}-${ticketIndex}`}>
-                        <span className="segment-number">{ticketIndex + 1}</span>
-                        <div className="segment-route">
-                          <strong>
-                            {from} <span>→</span> {to}
-                          </strong>
-                          <small>
-                            {formatTime(ticket.timeFrom)}–{formatTime(ticket.timeTo)} · {ticket.class} klasa
-                          </small>
-                        </div>
-                        <div className="segment-seat">
-                          <strong>
-                            {ticket.seat
-                              ? `wagon ${ticket.wagon}, miejsce ${ticket.seat}`
-                              : ticket.seated
-                                ? "miejsce przydzielane"
-                                : "bez gwarancji miejsca"}
-                          </strong>
-                          <small>{formatMoney(ticket.price)}</small>
-                        </div>
+            <section className="passenger-route">
+              <div className="segment-list">
+                {check.segments.map((segment, segmentIndex) => {
+                  const from = stationById.get(segment.from)?.name ?? `Stacja ${segment.from}`;
+                  const to = stationById.get(segment.to)?.name ?? `Stacja ${segment.to}`;
+                  return (
+                    <div className="segment" key={`${segment.from}-${segment.to}-${segmentIndex}`}>
+                      <span className="segment-number">{segmentIndex + 1}</span>
+                      <div className="segment-route">
+                        <strong>
+                          {from} <span>→</span> {to}
+                        </strong>
+                        <small>
+                          {formatTime(segment.timeFrom)}–{formatTime(segment.timeTo)} · {ticketClass} klasa
+                        </small>
                       </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+                      <div className="segment-seat">
+                        <strong>{availabilityLabel(segment.occupancyPercent)}</strong>
+                        <small>{Math.round(segment.occupancyPercent)}% zajętości</small>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           </div>
           <div className="details-footer">
-            <span>
-              Rezerwuj odcinki w tej kolejności; miejsca mogą zmienić się przed płatnością.
-            </span>
-            <a href={train.bookingUrl} target="_blank" rel="noreferrer">
-              Otwórz e-IC →
-            </a>
+            <span>Dostępność może zmienić się przed finalizacją zakupu.</span>
+            {train.bookingUrl && (
+              <a href={train.bookingUrl} target="_blank" rel="noreferrer">
+                Kup ten pociąg w e-IC →
+              </a>
+            )}
           </div>
         </details>
       )}
 
-      {check.status === "error" && check.message && (
+      {["unknown", "error"].includes(check.status) && check.message && (
         <p className="card-message">{check.message}</p>
       )}
     </article>

@@ -1,12 +1,9 @@
 # RailScout
 
-RailScout is an independent, private-first search interface for PKP Intercity
-trains. A single route search lists every matching direct train. When an
-authorized seat-inventory adapter is connected, RailScout asks for every
-possible station pair in one batch and computes the best complete seated route
-locally for every passenger.
-
-No timetable or seat request is sent through another consumer search website.
+RailScout is a private-first PKP Intercity seat-availability search. One query
+checks every visible direct train and every station-pair combination, then
+selects the complete route with the fewest ticket splits and the lowest peak
+occupancy.
 
 ## Run locally
 
@@ -17,62 +14,44 @@ npm install
 npm run dev
 ```
 
-The repository includes an attributed open-data timetable snapshot, so route
-search works without credentials for dates covered by that snapshot. Copy
-`.env.example` to `.env.local` to enable current official data or an authorized
-seat adapter.
+The repository includes an attributed timetable snapshot for the dates covered
+by the feed. Add `PLK_API_KEY` to `.env.local` to use current timetable data from
+the PKP PLK Open Railway Data API.
 
-## Data providers
+## Seat availability
+
+RailScout uses the availability signal exposed by the current e-IC sales
+interface. For each train it:
+
+1. Generates every directed station pair on the requested route.
+2. Checks the selected class or bicycle-place inventory with bounded
+   concurrency.
+3. Stops the sweep immediately when the carrier reports a service outage or
+   rate limit.
+4. Builds the best complete route from segments below 100% occupancy.
+
+Responses are cached briefly to avoid repeating identical checks. Results use
+the same occupancy bands as e-IC: high availability up to 40%, moderate up to
+80%, low below 100%, and unavailable at 100%.
+
+The e-IC station-code mapping in `app/data/eic-stations.json` is generated from
+the carrier's station catalogue. Purchase buttons open a route-and-time search
+that places the selected connection first instead of sending visitors to the
+portal home page.
+
+## Timetable data
 
 Timetables use the documented PKP PLK Open Railway Data API when `PLK_API_KEY`
-is configured. Results are cached briefly to respect the official rate limits.
-Without a key, the server uses the bundled PKP Intercity-only GTFS snapshot
-created from PKP PLK open data and Mikołaj Kuranowski's reusable GTFS feed.
+is configured. Results are cached briefly. The fallback is the bundled PKP
+Intercity-only GTFS snapshot created from PKP PLK open data and Mikołaj
+Kuranowski's reusable GTFS feed.
 
-Live seat inventory is intentionally separate. PKP PLK publishes schedules,
-not carrier booking inventory. RailScout therefore does not scrape a booking
-site. Set both `SEAT_INVENTORY_API_URL` and `SEAT_INVENTORY_API_TOKEN` only when
-you have permission to use an inventory service.
-
-The adapter receives one versioned POST request containing the train,
-preferences, and every directed station pair. It returns:
-
-```json
-{
-  "offers": [
-    {
-      "passengerIndex": 1,
-      "from": 33605,
-      "to": 80416,
-      "timeFrom": "2026-07-26T13:28:00+02:00",
-      "timeTo": "2026-07-26T16:55:00+02:00",
-      "price": 16900,
-      "seated": true,
-      "class": 2,
-      "wagon": "7",
-      "seat": "42",
-      "hasBike": false,
-      "hasQuiet": false
-    }
-  ]
-}
-```
-
-`price` is expressed in grosze. RailScout validates the response and computes
-the complete path itself, preferring fewer seat changes and then lower price.
-
-## Refresh the offline snapshot
-
-Download and extract `polish_trains.zip` from
+To refresh the snapshot, download and extract `polish_trains.zip` from
 [mkuran.pl/gtfs](https://mkuran.pl/gtfs/), then run:
 
 ```bash
 npm run data:import -- /path/to/extracted/gtfs
 ```
-
-The importer keeps rail services operated by PKP Intercity, regenerates the
-station catalogue, embeds source attribution, and writes a compact snapshot.
-It creates no runtime dependency on the feed host.
 
 ## Verify
 
@@ -81,8 +60,9 @@ npm run lint
 npm test
 ```
 
-Primary data documentation:
+Primary references:
 
 - [PKP PLK Open Data](https://www.plk-sa.pl/klienci-i-kontrahenci/api-otwarte-dane)
 - [Open Railway Data API documentation](https://pdp-api.plk-sa.pl/api-documentation)
+- [e-IC](https://ebilet.intercity.pl/)
 - [Polish trains GTFS](https://mkuran.pl/gtfs/)

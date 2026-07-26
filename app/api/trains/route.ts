@@ -1,4 +1,3 @@
-import { isSeatProviderConfigured } from "@/app/lib/seat-provider";
 import { searchTimetable, TimetableError } from "@/app/lib/timetable";
 
 type SearchPayload = {
@@ -32,10 +31,7 @@ export async function POST(request: Request) {
       endStationId: payload.endStationId,
       startDateTime: payload.startDateTime,
     });
-    return Response.json({
-      ...result,
-      availabilityConfigured: isSeatProviderConfigured(),
-    });
+    return Response.json(result);
   } catch (error) {
     console.error("Independent timetable search failed", error);
     if (error instanceof TimetableError) {

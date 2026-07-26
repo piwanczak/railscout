@@ -408,7 +408,7 @@ summary:focus-visible {
 
 .detail-fields {
   margin-top: 17px;
-  grid-template-columns: 1.1fr 1fr 0.85fr 0.85fr;
+  grid-template-columns: 1.1fr 1fr 0.85fr;
   gap: 12px;
 }
 
@@ -932,14 +932,10 @@ summary:focus-visible {
 }
 
 .status-badge.unavailable,
+.status-badge.unknown,
 .status-badge.error {
   background: #ece7e0;
   color: #80736b;
-}
-
-.status-badge.not-connected {
-  background: #eef1cc;
-  color: #4c5d22;
 }
 
 .status-badge i {

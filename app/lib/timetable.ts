@@ -1,4 +1,8 @@
 import snapshotJson from "../data/ic-timetable.json";
+import {
+  buildEicBookingUrl,
+  normaliseEicCategory,
+} from "./eic";
 
 type SnapshotStop = [
   stationId: number,
@@ -62,6 +66,7 @@ type PlkResponse = {
 
 export type TrainResult = {
   uuid: string;
+  category: string;
   trainNumber: string;
   trainName: string;
   departure: string;
@@ -76,7 +81,12 @@ export type TrainResult = {
   arrivalTrack: string;
   stops: number;
   stationIds: number[];
-  bookingUrl: string;
+  stationStops: Array<{
+    id: number;
+    arrival: string;
+    departure: string;
+  }>;
+  bookingUrl: string | null;
 };
 
 export type ScheduleSource = {
@@ -99,7 +109,6 @@ export class TimetableError extends Error {
 
 const snapshot = snapshotJson as unknown as TimetableSnapshot;
 const PLK_API_BASE = "https://pdp-api.plk-sa.pl/api/v1";
-const BOOKING_URL = "https://ebilet.intercity.pl/";
 const MAX_RESULTS = 100;
 const plkCache = new Map<
   string,
@@ -184,10 +193,19 @@ function searchSnapshot(input: {
     const departure = timestamp(date, origin[2], offset);
     const arrival = timestamp(date, destination[1], offset);
     if (Date.parse(departure) < requestedDeparture) return [];
+    const category = normaliseEicCategory(trip.category);
+    const stationStops = trip.stops
+      .slice(route.originIndex, route.destinationIndex + 1)
+      .map((stop) => ({
+        id: stop[0],
+        arrival: timestamp(date, stop[1], offset),
+        departure: timestamp(date, stop[2], offset),
+      }));
 
     return [
       {
         uuid: `gtfs-${trip.id}-${date}`,
+        category,
         trainNumber: trip.number || "—",
         trainName: [trip.category, trip.name].filter(Boolean).join(" ") || "PKP Intercity",
         departure,
@@ -200,11 +218,14 @@ function searchSnapshot(input: {
         departureTrack: origin[4] || "",
         arrivalPlatform: destination[3] || "",
         arrivalTrack: destination[4] || "",
-        stops: route.destinationIndex - route.originIndex + 1,
-        stationIds: trip.stops
-          .slice(route.originIndex, route.destinationIndex + 1)
-          .map((stop) => stop[0]),
-        bookingUrl: BOOKING_URL,
+        stops: stationStops.length,
+        stationIds: stationStops.map((stop) => stop.id),
+        stationStops,
+        bookingUrl: buildEicBookingUrl({
+          originStationId: input.startStationId,
+          destinationStationId: input.endStationId,
+          departure,
+        }),
       },
     ];
   });
@@ -288,9 +309,41 @@ async function searchOfficialPlk(input: {
       origin.arrivalCommercialCategory ??
       route.commercialCategorySymbol ??
       "IC";
+    const routeStations = stations.slice(
+      routeIndexes.originIndex,
+      routeIndexes.destinationIndex + 1,
+    );
+    let previousMinutes = Number.NEGATIVE_INFINITY;
+    const stationStops = routeStations.flatMap((station) => {
+      const arrivalClock = timeSpanMinutes(
+        station.arrivalTime ?? station.departureTime,
+      );
+      const departureClock = timeSpanMinutes(
+        station.departureTime ?? station.arrivalTime,
+      );
+      if (arrivalClock === null || departureClock === null) return [];
+
+      let stopArrival = Number(station.arrivalDay ?? 0) * 1440 + arrivalClock;
+      while (stopArrival < previousMinutes) stopArrival += 1440;
+      let stopDeparture =
+        Number(station.departureDay ?? station.arrivalDay ?? 0) * 1440 +
+        departureClock;
+      while (stopDeparture < stopArrival) stopDeparture += 1440;
+      previousMinutes = stopDeparture;
+
+      return [
+        {
+          id: Number(station.stationId),
+          arrival: timestamp(date, stopArrival, offset),
+          departure: timestamp(date, stopDeparture, offset),
+        },
+      ];
+    });
+    const eicCategory = normaliseEicCategory(category);
     return [
       {
         uuid: `plk-${route.scheduleId ?? 0}-${route.orderId ?? 0}-${route.trainOrderId ?? 0}-${date}`,
+        category: eicCategory,
         trainNumber:
           origin.departureTrainNumber ?? origin.arrivalTrainNumber ?? route.nationalNumber ?? "—",
         trainName: [category, route.name].filter(Boolean).join(" ") || "PKP Intercity",
@@ -304,11 +357,14 @@ async function searchOfficialPlk(input: {
         departureTrack: origin.departureTrack ?? "",
         arrivalPlatform: destination.arrivalPlatform ?? "",
         arrivalTrack: destination.arrivalTrack ?? "",
-        stops: routeIndexes.destinationIndex - routeIndexes.originIndex + 1,
-        stationIds: stations
-          .slice(routeIndexes.originIndex, routeIndexes.destinationIndex + 1)
-          .map((station) => Number(station.stationId)),
-        bookingUrl: BOOKING_URL,
+        stops: stationStops.length,
+        stationIds: stationStops.map((station) => station.id),
+        stationStops,
+        bookingUrl: buildEicBookingUrl({
+          originStationId: input.startStationId,
+          destinationStationId: input.endStationId,
+          departure,
+        }),
       },
     ];
   });

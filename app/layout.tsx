@@ -33,13 +33,13 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase,
-    title: "RailScout — wszystkie miejsca w jednym wyszukaniu",
+    title: "RailScout — dostępność miejsc we wszystkich połączeniach",
     description:
-      "Niezależny rozkład PKP Intercity i własny silnik, który sprawdza wszystkie możliwe podziały trasy po podłączeniu autoryzowanego źródła miejsc.",
+      "Sprawdź każdy widoczny pociąg PKP Intercity i wszystkie możliwe podziały trasy w jednym wyszukaniu.",
     openGraph: {
-      title: "Jedno wyszukanie. Wszystkie miejsca.",
+      title: "Jedno wyszukanie. Wszystkie kombinacje.",
       description:
-        "RailScout łączy otwarty rozkład z własnym silnikiem wszystkich możliwych zmian fotela.",
+        "RailScout porównuje dostępność miejsc na całej trasie i na każdym możliwym podziale.",
       type: "website",
       locale: "pl_PL",
       images: [
@@ -47,15 +47,15 @@ export async function generateMetadata(): Promise<Metadata> {
           url: socialImage,
           width: 1728,
           height: 912,
-          alt: "RailScout — jedno wyszukanie, wszystkie miejsca",
+          alt: "RailScout — jedno wyszukanie, wszystkie kombinacje",
         },
       ],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Jedno wyszukanie. Wszystkie miejsca.",
+      title: "Jedno wyszukanie. Wszystkie kombinacje.",
       description:
-        "Niezależny rozkład i własny silnik kombinacji miejsc.",
+        "Dostępność miejsc na całej trasie i na każdym możliwym podziale.",
       images: [socialImage],
     },
   };

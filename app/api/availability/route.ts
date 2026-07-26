@@ -1,43 +1,58 @@
-import { fetchSeatOffers, isSeatProviderConfigured } from "@/app/lib/seat-provider";
-import { findSeatPlans } from "@/app/lib/seat-planner.mjs";
+import { fetchSeatAvailability } from "@/app/lib/seat-provider";
 
 type AvailabilityPayload = {
   uuid?: string;
+  category?: string;
   trainNumber?: string;
-  stationIds?: number[];
+  stationStops?: Array<{
+    id?: number;
+    arrival?: string;
+    departure?: string;
+  }>;
   startDateTime?: string;
+  arrivalDateTime?: string;
   numberOfPassengers?: number;
   bike?: boolean;
-  quietZone?: boolean;
   ticketClass?: 1 | 2;
 };
 
-function validStationPath(value: unknown): value is number[] {
+function validStationPath(
+  value: AvailabilityPayload["stationStops"],
+): value is Array<{ id: number; arrival: string; departure: string }> {
   return (
     Array.isArray(value) &&
     value.length >= 2 &&
     value.length <= 80 &&
-    value.every((stationId) => Number.isInteger(stationId) && stationId > 0) &&
-    new Set(value).size === value.length
+    value.every(
+      (stop) =>
+        Boolean(stop) &&
+        typeof stop === "object" &&
+        Number.isInteger(stop.id) &&
+        Number(stop.id) > 0 &&
+        typeof stop.arrival === "string" &&
+        !Number.isNaN(Date.parse(stop.arrival)) &&
+        typeof stop.departure === "string" &&
+        !Number.isNaN(Date.parse(stop.departure)),
+    ) &&
+    new Set(value.map((stop) => stop.id)).size === value.length
   );
 }
 
 export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as AvailabilityPayload;
-    const passengerCount = Math.min(
-      6,
-      Math.max(1, Number(payload.numberOfPassengers ?? 1)),
-    );
     const ticketClass = payload.ticketClass === 1 ? 1 : 2;
 
     if (
       typeof payload.uuid !== "string" ||
       payload.uuid.length < 8 ||
+      typeof payload.category !== "string" ||
       typeof payload.trainNumber !== "string" ||
-      !validStationPath(payload.stationIds) ||
+      !validStationPath(payload.stationStops) ||
       typeof payload.startDateTime !== "string" ||
-      Number.isNaN(Date.parse(payload.startDateTime))
+      Number.isNaN(Date.parse(payload.startDateTime)) ||
+      typeof payload.arrivalDateTime !== "string" ||
+      Number.isNaN(Date.parse(payload.arrivalDateTime))
     ) {
       return Response.json(
         { error: "Nieprawidłowe dane pociągu." },
@@ -45,47 +60,23 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!isSeatProviderConfigured()) {
-      return Response.json(
-        {
-          code: "SEAT_PROVIDER_NOT_CONFIGURED",
-          error:
-            "Rozkład jest niezależny, ale autoryzowane źródło bieżącej dostępności miejsc nie zostało jeszcze podłączone.",
-        },
-        { status: 503 },
-      );
-    }
-
-    const offers = await fetchSeatOffers({
+    const result = await fetchSeatAvailability({
       train: {
         id: payload.uuid,
         number: payload.trainNumber,
+        category: payload.category,
         departure: payload.startDateTime,
+        arrival: payload.arrivalDateTime,
       },
-      stationIds: payload.stationIds,
-      passengerCount,
+      stationStops: payload.stationStops,
       ticketClass,
       bike: Boolean(payload.bike),
-      quietZone: Boolean(payload.quietZone),
     });
-    const passengers = findSeatPlans({
-      stationIds: payload.stationIds,
-      passengerCount,
-      ticketClass,
-      bike: Boolean(payload.bike),
-      quietZone: Boolean(payload.quietZone),
-      offers: offers as Parameters<typeof findSeatPlans>[0]["offers"],
-    });
-
-    return Response.json({
-      status: passengers ? "available" : "unavailable",
-      passengers: passengers ?? [],
-      checkedSegments: (payload.stationIds.length * (payload.stationIds.length - 1)) / 2,
-    });
+    return Response.json(result);
   } catch (error) {
-    console.error("Authorized availability lookup failed", error);
+    console.error("Seat availability lookup failed", error);
     return Response.json(
-      { error: "Autoryzowane źródło miejsc nie odpowiedziało prawidłowo." },
+      { error: "Nie udało się sprawdzić dostępności miejsc." },
       { status: 502 },
     );
   }
