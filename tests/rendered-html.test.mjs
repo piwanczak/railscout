@@ -41,6 +41,8 @@ const mockGrmServer = createServer((request, response) => {
   mockGrmRequests.push({
     url: request.url,
     appVersion: request.headers["app-version"],
+    appVersionMarker: request.headers["app-version-1.5.20"],
+    contentType: request.headers["content-type"],
     origin: request.headers.origin,
     referer: request.headers.referer,
   });
@@ -472,9 +474,11 @@ test("availability API returns the exact reference seat from official-style GRM 
     mockGrmRequests.every(
       (request) =>
         request.url?.includes("/grm/") &&
-        request.appVersion === undefined &&
-        request.origin === undefined &&
-        request.referer === undefined,
+        request.appVersion === "1.5.20" &&
+        request.appVersionMarker === "" &&
+        request.contentType === "application/json" &&
+        request.origin === "https://ebilet.intercity.pl" &&
+        request.referer === "https://ebilet.intercity.pl/",
     ),
   );
 });
