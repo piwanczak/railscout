@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { access, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import test, { after } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   deriveExactSegmentOutcomes,
   parseGrmSeatMap,
@@ -445,4 +448,100 @@ test("carrier outages stay unknown instead of becoming false sold-out results", 
   assert.equal(payload.totalSegments, 3);
   assert.match(payload.message, /PKP Intercity/i);
   assert.equal(mockGrmRequests.length, 1);
+});
+
+test("local preview serves the hydrated UI and seat API on one origin", async (context) => {
+  const portProbe = createServer();
+  await new Promise((resolve) => portProbe.listen(0, "127.0.0.1", resolve));
+  const address = portProbe.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise((resolve, reject) =>
+    portProbe.close((error) => (error ? reject(error) : resolve())),
+  );
+
+  const output = [];
+  const errors = [];
+  const preview = spawn(
+    process.execPath,
+    [
+      fileURLToPath(new URL("../scripts/preview-server.mjs", import.meta.url)),
+      "--port",
+      String(port),
+    ],
+    {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  preview.stdout.on("data", (chunk) => output.push(chunk.toString()));
+  preview.stderr.on("data", (chunk) => errors.push(chunk.toString()));
+  context.after(async () => {
+    if (preview.exitCode === null) {
+      preview.kill();
+      await once(preview, "exit");
+    }
+  });
+
+  let pageResponse;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      pageResponse = await fetch(`http://127.0.0.1:${port}/`);
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  assert.ok(
+    pageResponse,
+    `Preview did not start. stdout: ${output.join("")} stderr: ${errors.join("")}`,
+  );
+  assert.equal(pageResponse.status, 200);
+  const html = await pageResponse.text();
+  const clientEntry = html.match(/\/assets\/index-[^"']+\.js/)?.[0];
+  assert.ok(clientEntry, "Rendered page should reference its hydration bundle");
+
+  const assetResponse = await fetch(`http://127.0.0.1:${port}${clientEntry}`);
+  assert.equal(assetResponse.status, 200);
+  assert.match(assetResponse.headers.get("content-type") ?? "", /javascript/i);
+  assert.ok((await assetResponse.arrayBuffer()).byteLength > 10_000);
+
+  const availabilityResponse = await fetch(
+    `http://127.0.0.1:${port}/api/availability`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        uuid: "preview-5330",
+        category: "IC",
+        trainNumber: "5330",
+        startDateTime: "2026-07-27T10:08:00+02:00",
+        arrivalDateTime: "2026-07-27T14:39:00+02:00",
+        stationStops: [
+          {
+            id: 33605,
+            arrival: "2026-07-27T10:08:00+02:00",
+            departure: "2026-07-27T10:08:00+02:00",
+          },
+          {
+            id: 80416,
+            arrival: "2026-07-27T14:39:00+02:00",
+            departure: "2026-07-27T14:39:00+02:00",
+          },
+        ],
+        numberOfPassengers: 1,
+        ticketClass: 2,
+        bike: false,
+      }),
+    },
+  );
+  assert.equal(availabilityResponse.status, 200);
+  const availability = await availabilityResponse.json();
+  assert.equal(availability.status, "available");
+  assert.equal(availability.inventorySource, "PKP Intercity GRM");
+  assert.deepEqual(availability.segments[0].seats[0], {
+    wagon: "3",
+    seat: "104",
+    label: "Miejsce 104 klasa 2, korytarz, Wolne, niewybrane",
+  });
 });

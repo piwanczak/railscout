@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
-    "start": "vinext start",
+    "start": "node scripts/preview-server.mjs",
+    "preview": "npm run build && npm run start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern app/data",
     "data:import": "node scripts/import-open-gtfs.mjs",
