@@ -64,6 +64,8 @@ type GrmComposition = {
 const OFFICIAL_GRM_BASE = "https://api-gateway.intercity.pl/grm";
 const OFFICIAL_EIC_ORIGIN = "https://ebilet.intercity.pl";
 const DEFAULT_EIC_APP_VERSION = "1.5.20";
+const EIC_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
 const configuredGrmBase = process.env.EIC_GRM_API_URL?.trim();
 const configuredGrmToken = process.env.EIC_GRM_API_TOKEN?.trim();
 const configuredEicAppVersion = process.env.EIC_APP_VERSION?.trim();
@@ -118,7 +120,18 @@ function grmHeaders(format: "json" | "text") {
     "Content-Type": "application/json",
     Origin: OFFICIAL_EIC_ORIGIN,
     Referer: `${OFFICIAL_EIC_ORIGIN}/`,
+    "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Sec-CH-UA": '"Not;A=Brand";v="99", "Chromium";v="150"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+    "User-Agent": EIC_BROWSER_USER_AGENT,
   };
+  if (GRM_BASE === OFFICIAL_GRM_BASE) {
+    headers.Host = "api-gateway.intercity.pl";
+  }
   if (GRM_API_TOKEN) headers.Authorization = `Bearer ${GRM_API_TOKEN}`;
   return headers;
 }

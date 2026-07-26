@@ -46,6 +46,8 @@ const mockGrmServer = createServer((request, response) => {
     authorization: request.headers.authorization,
     origin: request.headers.origin,
     referer: request.headers.referer,
+    userAgent: request.headers["user-agent"],
+    secFetchSite: request.headers["sec-fetch-site"],
   });
 
   if (request.url?.includes("/IC/9999/")) {
@@ -482,7 +484,9 @@ test("availability API returns the exact reference seat from official-style GRM 
         request.authorization ===
           "Bearer test-relay-token-with-at-least-32-characters" &&
         request.origin === "https://ebilet.intercity.pl" &&
-        request.referer === "https://ebilet.intercity.pl/",
+        request.referer === "https://ebilet.intercity.pl/" &&
+        request.userAgent?.includes("Chrome/150.0.0.0") &&
+        request.secFetchSite === "same-site",
     ),
   );
 });

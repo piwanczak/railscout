@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const OFFICIAL_GRM_BASE = "https://api-gateway.intercity.pl/grm";
 const OFFICIAL_EIC_ORIGIN = "https://ebilet.intercity.pl";
+const EIC_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
 const DEFAULT_EIC_APP_VERSION = "1.5.20";
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
@@ -194,8 +196,7 @@ export function createGrmRelayServer({
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMilliseconds);
     try {
-      const upstream = await fetchImpl(`${root}/${upstreamPath}`, {
-        headers: {
+      const upstreamHeaders = {
           Accept: upstreamPath.startsWith("sklad/")
             ? "application/json"
             : "image/svg+xml,text/plain;q=0.8,*/*;q=0.5",
@@ -204,7 +205,20 @@ export function createGrmRelayServer({
           "Content-Type": "application/json",
           Origin: OFFICIAL_EIC_ORIGIN,
           Referer: `${OFFICIAL_EIC_ORIGIN}/`,
-        },
+          "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+          "Sec-CH-UA": '"Not;A=Brand";v="99", "Chromium";v="150"',
+          "Sec-CH-UA-Mobile": "?0",
+          "Sec-CH-UA-Platform": '"Windows"',
+          "Sec-Fetch-Dest": "empty",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Site": "same-site",
+          "User-Agent": EIC_BROWSER_USER_AGENT,
+        };
+      if (root === OFFICIAL_GRM_BASE) {
+        upstreamHeaders.Host = "api-gateway.intercity.pl";
+      }
+      const upstream = await fetchImpl(`${root}/${upstreamPath}`, {
+        headers: upstreamHeaders,
         signal: controller.signal,
       });
       const body = await boundedBody(upstream, maximumResponseBytes);

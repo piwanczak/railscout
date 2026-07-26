@@ -13,6 +13,8 @@ const upstream = createServer((request, response) => {
     appVersionMarker: request.headers["app-version-1.5.20"],
     origin: request.headers.origin,
     referer: request.headers.referer,
+    userAgent: request.headers["user-agent"],
+    secFetchSite: request.headers["sec-fetch-site"],
   });
   if (request.url?.includes("/IC/9999/")) {
     const body = "x".repeat(128);
@@ -92,6 +94,9 @@ test("GRM relay forwards only the official request contract and strips its token
     appVersionMarker: "",
     origin: "https://ebilet.intercity.pl",
     referer: "https://ebilet.intercity.pl/",
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    secFetchSite: "same-site",
   });
 });
 
