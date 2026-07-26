@@ -72,7 +72,7 @@ type ScheduleSource = {
 type SearchPhase = "idle" | "loading-trains" | "checking" | "done";
 type SortKey = "recommended" | "departure" | "seats" | "switches";
 
-const AVAILABILITY_TIMEOUT_MS = 12_000;
+const AVAILABILITY_TIMEOUT_MS = 32_000;
 const AVAILABILITY_RETRY_DELAY_MS = 1_000;
 const CONNECTION_CHECK_DELAY_MS = 750;
 const WARSAW_TIME_ZONE = "Europe/Warsaw";

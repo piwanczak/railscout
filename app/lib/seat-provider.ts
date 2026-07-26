@@ -96,7 +96,7 @@ const REQUEST_TIMEOUT_MILLISECONDS = positiveIntegerSetting(
 );
 const OUTBOUND_INTERVAL_MILLISECONDS = positiveIntegerSetting(
   process.env.EIC_GRM_MIN_INTERVAL_MS,
-  500,
+  350,
 );
 const CACHE_MILLISECONDS = 90_000;
 const MAX_COMPOSITION_BYTES = 256 * 1024;
@@ -580,6 +580,7 @@ export async function fetchSeatAvailability(
     throw new Error("At least two station stops are required");
   }
   let providerUnavailable = false;
+  let retryableFailure = false;
   const reportLookupFailure = (error: unknown) => {
     if (!providerUnavailable) {
       const details = {
@@ -597,6 +598,8 @@ export async function fetchSeatAvailability(
       }
     }
     providerUnavailable = true;
+    retryableFailure ||=
+      error instanceof ProviderUnavailableError && !signal?.aborted;
   };
 
   let directInventory = unknownLeg();
@@ -655,8 +658,9 @@ export async function fetchSeatAvailability(
   return {
     ...summary,
     inventorySource: "PKP Intercity GRM",
-    retryable: providerUnavailable,
-    retryAfterMs: providerUnavailable ? 1_000 : undefined,
+    retryable: providerUnavailable && retryableFailure,
+    retryAfterMs:
+      providerUnavailable && retryableFailure ? 1_000 : undefined,
     message:
       summary.status === "unknown"
         ? providerUnavailable

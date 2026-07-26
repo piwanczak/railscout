@@ -117,7 +117,7 @@ process.env.EIC_GRM_API_URL =
   `http://127.0.0.1:${mockGrmAddress.port}/grm`;
 process.env.EIC_GRM_API_TOKEN = "test-relay-token-with-at-least-32-characters";
 process.env.EIC_GRM_REQUEST_TIMEOUT_MS = "80";
-process.env.EIC_GRM_MIN_INTERVAL_MS = "5";
+process.env.EIC_GRM_MIN_INTERVAL_MS = "20";
 after(
   () =>
     new Promise((resolve, reject) =>
@@ -542,7 +542,7 @@ test("availability API checks the full route, derives every pair, and returns a 
   assert.ok(
     mockGrmRequests.slice(1).every(
       (request, index) =>
-        request.receivedAt - mockGrmRequests[index].receivedAt >= 3,
+        request.receivedAt - mockGrmRequests[index].receivedAt >= 10,
     ),
   );
   assert.ok(

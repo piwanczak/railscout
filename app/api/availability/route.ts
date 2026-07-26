@@ -62,7 +62,7 @@ export async function POST(request: Request) {
       deadline.abort(
         new DOMException("Availability deadline exceeded", "TimeoutError"),
       ),
-    10_000,
+    30_000,
   );
   if (request.signal.aborted) abortFromClient();
   else request.signal.addEventListener("abort", abortFromClient, { once: true });
