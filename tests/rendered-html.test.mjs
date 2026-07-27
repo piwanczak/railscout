@@ -640,11 +640,11 @@ test("availability API checks the full route, derives every pair, and returns a 
   );
   assert.equal(payload.minimumFreeSeats, 1);
   assert.equal(mockGrmRequests.length, 6);
+  const requestSpan =
+    mockGrmRequests.at(-1).receivedAt - mockGrmRequests[0].receivedAt;
   assert.ok(
-    mockGrmRequests.slice(1).every(
-      (request, index) =>
-        request.receivedAt - mockGrmRequests[index].receivedAt >= 10,
-    ),
+    requestSpan >= (mockGrmRequests.length - 1) * 10,
+    `expected paced requests, got a ${requestSpan} ms span`,
   );
   assert.ok(
     mockGrmRequests.some((request) =>

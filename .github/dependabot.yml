@@ -22,10 +22,10 @@ updates:
       - dependency-name: eslint
         versions:
           - ">=10 <11"
-      # The current typescript-eslint parser does not support TypeScript 7 yet.
+      # vinext's tsconfig loader still peers on TypeScript 5.
       - dependency-name: typescript
         versions:
-          - ">=7 <8"
+          - ">=6 <8"
       # Keep Node types aligned with the Node 24 LTS runtime used in CI.
       - dependency-name: "@types/node"
         versions:
@@ -50,3 +50,8 @@ updates:
       time: "05:00"
       timezone: Europe/Warsaw
     open-pull-requests-limit: 3
+    ignore:
+      # Keep the relay on the same Node LTS line as CI.
+      - dependency-name: node
+        versions:
+          - ">=25"
