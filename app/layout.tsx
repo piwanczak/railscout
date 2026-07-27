@@ -1,16 +1,22 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { headers } from "next/headers";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const bitter = localFont({
+  src: "./fonts/Bitter-Variable.ttf",
+  variable: "--font-bitter",
+  display: "swap",
+  style: "normal",
+  weight: "100 900",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const oswald = localFont({
+  src: "./fonts/Oswald-Variable.ttf",
+  variable: "--font-oswald",
+  display: "swap",
+  style: "normal",
+  weight: "200 700",
 });
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -73,9 +79,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pl">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className={`${bitter.variable} ${oswald.variable} antialiased`}>
         {children}
       </body>
     </html>

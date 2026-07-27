@@ -91,9 +91,10 @@ export default function DataAndLicensesPage() {
         <h2>Kod, grafika i zależności</h2>
         <p>
           Oryginalny kod RailScout i grafika podglądu są dostępne na licencji
-          MIT. Krój Geist zachowuje licencję SIL Open Font License 1.1, a
-          biblioteki JavaScript zachowują własne licencje zapisane w pliku
-          blokady zależności.
+          MIT. Kroje Bitter i Oswald zachowują licencję SIL Open Font License
+          1.1, są osadzane lokalnie podczas kompilacji i nie wymagają połączenia
+          z Google Fonts podczas korzystania z serwisu. Biblioteki JavaScript
+          zachowują własne licencje zapisane w pliku blokady zależności.
         </p>
         <p>
           RailScout nie jest powiązany z PKP Intercity ani PKP Polskimi Liniami
