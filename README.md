@@ -6,7 +6,7 @@ seat is not free for the full journey, RailScout evaluates every contiguous
 station-pair combination and chooses a complete route with the fewest ticket
 splits.
 
-The project is an experimental private beta. It is not affiliated with,
+The project is an experimental beta. It is not affiliated with,
 endorsed by, or operated by PKP Intercity or PKP Polskie Linie Kolejowe.
 
 ## What it does
@@ -114,7 +114,7 @@ RAILSCOUT_RELAY_TOKEN=replace-with-a-random-secret npm run relay:start
 ```
 
 The repository `Dockerfile` builds only this relay and is ready for a container
-host. After deployment, configure the private Sites project with both values
+host. After deployment, configure the Sites project with both values
 and deploy a new immutable version:
 
 ```text

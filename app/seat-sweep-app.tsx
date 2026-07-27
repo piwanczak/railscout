@@ -600,7 +600,7 @@ export function SeatSweepApp() {
             <span />
           </span>
           <span>RailScout</span>
-          <small>private beta</small>
+          <small>beta</small>
         </a>
         <div className="topbar-note">
           <span className="live-dot" aria-hidden="true" />
