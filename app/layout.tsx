@@ -79,7 +79,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pl">
-      <body className={`${bitter.variable} ${oswald.variable} antialiased`}>
+      <body className={`${bitter.variable} ${oswald.variable}`}>
         {children}
       </body>
     </html>

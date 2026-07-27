@@ -1,5 +1,3 @@
-@import "tailwindcss";
-
 :root {
   --ink: #25343a;
   --ink-strong: #18242a;
@@ -41,6 +39,8 @@ body {
   color: var(--ink-strong);
   font-family: var(--font-bitter), Georgia, serif;
   font-variant-numeric: tabular-nums;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,

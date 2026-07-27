@@ -46,7 +46,8 @@ port, build first and then run `npm run start -- --port 3100`.
 
 ## Configuration
 
-Copy `.env.example` to `.env.local` and set only the values you need:
+RailScout runs without configuration. Put optional local overrides in an
+ignored `.env.local` file:
 
 - `PLK_API_KEY` enables the official live timetable API. Obtain a key directly
   from PKP PLK and keep it server-side.
@@ -90,7 +91,7 @@ changed generated data and provenance. `npm run data:check` also rejects a
 snapshot with less than seven days of validity remaining; set
 `GTFS_MIN_VALIDITY_DAYS` only when intentionally changing that release gate.
 Hosted Sites releases are immutable, so a newly committed snapshot becomes live
-there with the next private Sites deployment. Supplying `PLK_API_KEY` avoids that
+there with the next Sites deployment. Supplying `PLK_API_KEY` avoids that
 deployment cadence by using the official live timetable API at runtime.
 
 ## Seat inventory from Sites

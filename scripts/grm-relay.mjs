@@ -260,7 +260,6 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
   }
   const server = createGrmRelayServer({
     token: process.env.RAILSCOUT_RELAY_TOKEN,
-    upstreamBase: process.env.EIC_GRM_UPSTREAM_URL ?? OFFICIAL_GRM_BASE,
     appVersion: process.env.EIC_APP_VERSION ?? DEFAULT_EIC_APP_VERSION,
   });
   server.listen(port, host, () => {
