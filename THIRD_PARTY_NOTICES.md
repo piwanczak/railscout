@@ -45,10 +45,16 @@ repository.
 
 ## Fonts
 
-The application uses Geist Sans and Geist Mono through `next/font`. Geist is
-distributed under the SIL Open Font License 1.1. See the
-[official Geist repository](https://github.com/vercel/geist-font) for its
-license and sources.
+The application bundles Bitter and Oswald through `next/font/local`. Both
+families are distributed under the SIL Open Font License 1.1 and are self-hosted
+in the compiled application; the site makes no runtime request to Google Fonts.
+
+- Bitter: Copyright 2011 The Bitter Project Authors. See the
+  [bundled license text](app/fonts/Bitter-OFL.txt) and the
+  [official Google Fonts source](https://github.com/google/fonts/tree/main/ofl/bitter).
+- Oswald: Copyright 2016 The Oswald Project Authors. See the
+  [bundled license text](app/fonts/Oswald-OFL.txt) and the
+  [official Google Fonts source](https://github.com/google/fonts/tree/main/ofl/oswald).
 
 ## JavaScript dependencies
 
