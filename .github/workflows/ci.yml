@@ -34,5 +34,9 @@ jobs:
         run: docker build --tag railscout-relay:test .
       - name: Verify source, build, tests, data, and licenses
         run: npm run check
+      - name: Install the browser test runtime
+        run: npx playwright install --with-deps chromium
+      - name: Check desktop and mobile search behaviour
+        run: npm run test:browser
       - name: Reject high-severity dependency advisories
         run: npm run security:audit

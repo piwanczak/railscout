@@ -56,6 +56,8 @@ export function parseGrmSeatMap(payload, options) {
   /** @type {ExactSeat[]} */
   const seats = [];
   let eligiblePlaces = 0;
+  let complete = true;
+  const seen = new Set();
   const groupPattern = /<g\b([^>]*)>([\s\S]*?)<\/g>/gi;
 
   for (const match of payload.matchAll(groupPattern)) {
@@ -76,7 +78,11 @@ export function parseGrmSeatMap(payload, options) {
     const image = match[2].match(
       /<image\b(?=[^>]*\bclass\s*=\s*["'][^"']*\bplace\b[^"']*["'])[^>]*\bstatus\s*=\s*["']([^"']+)["'][^>]*>/i,
     );
-    if (!image) continue;
+    if (!image || !["1", "3"].includes(image[1]) || seen.has(seatMatch[1])) {
+      complete = false;
+      continue;
+    }
+    seen.add(seatMatch[1]);
 
     eligiblePlaces += 1;
     if (image[1] === "1") {
@@ -91,6 +97,7 @@ export function parseGrmSeatMap(payload, options) {
   return {
     seats: sortExactSeats(seats),
     eligiblePlaces,
+    complete,
   };
 }
 

@@ -51,6 +51,9 @@ ignored `.env.local` file:
 
 - `PLK_API_KEY` enables the official live timetable API. Obtain a key directly
   from PKP PLK and keep it server-side.
+- `TIMETABLE_SNAPSHOT_URL` selects an HTTPS snapshot source. The default is
+  `https://raw.githubusercontent.com/piwanczak/railscout/master/app/data/ic-timetable.json`.
+  Set it to `off` for a local-only or offline test.
 - `EIC_GRM_API_URL` overrides the e-IC seat-map root for tests or compatible
   development services. Production defaults to the current Intercity gateway.
 - `EIC_GRM_API_TOKEN` authenticates requests when the URL points to the
@@ -90,9 +93,13 @@ conditional-download cache, validates the complete project, and commits only
 changed generated data and provenance. `npm run data:check` also rejects a
 snapshot with less than seven days of validity remaining; set
 `GTFS_MIN_VALIDITY_DAYS` only when intentionally changing that release gate.
-Hosted Sites releases are immutable, so a newly committed snapshot becomes live
-there with the next Sites deployment. Supplying `PLK_API_KEY` avoids that
-deployment cadence by using the official live timetable API at runtime.
+After this version is deployed, the server checks the repository snapshot at
+most once an hour per running instance. It accepts only valid data that is at
+least as new as its current snapshot. It keeps the current data if the download
+fails and checks again after five minutes. An expired snapshot is never used
+for a date outside its validity window. The station catalogue is updated with
+the snapshot. Changes to the application code still require a Sites release.
+Supplying `PLK_API_KEY` uses the official live timetable API first.
 
 ## Seat inventory from Sites
 
@@ -131,11 +138,48 @@ ever exposed.
 ```bash
 npm run check
 npm run security:audit
+npx playwright install chromium
+npm run test:browser
 ```
 
 `npm run check` runs linting, TypeScript validation, a production build,
 unit/integration tests, data-provenance checks, and dependency-license checks.
 Tests use a local carrier mock and do not consume live inventory.
+Browser tests use local fixtures and check desktop and mobile search, result
+settings, cancellation, retry, booking links, and keyboard access.
+
+## Result limits
+
+Full-route checks can stop when enough seats are confirmed. These counts are
+shown as a minimum, not as the total free inventory. Split planning reads all
+relevant wagon maps for each adjacent section. It keeps complete seat sets
+until the route calculation is complete. Each section has its own booking link.
+The class and passenger count shown in results come from the submitted search.
+Changing the form does not change existing results. Stop checking to start a
+different search; use a card's refresh button to check that train again.
+
+Each available result shows the age of its oldest source response. A refresh
+bypasses the short map cache. Seat assignment remains subject to the carrier's
+purchase checks. GTFS service dates and clock changes follow the
+[GTFS time definition](https://gtfs.org/documentation/schedule/reference/#stop_timestxt).
+
+## Monitoring and release checks
+
+`GET /api/health` returns 503 when the current snapshot has fewer than seven
+days of validity remaining. The `Check deployed timetable` workflow checks
+the public deployment every six hours. Run `npm run monitor:deployment` for an
+immediate check. `SITE_HEALTH_URL` can select another deployment.
+
+Server logs contain JSON events for `snapshot_refresh`, `snapshot_health`, and
+`availability_lookup`. Availability events include duration, queue wait time,
+outbound request count, cache hits, and provider failure state. They do not
+include tokens or passenger identities. Use the hosting log service to track
+these events. GitHub reports a failed refresh or health workflow in Actions.
+
+The daily refresh and health workflows must be enabled on the repository's
+default branch. Commit and push the tested source there, verify the refresh
+run, then publish the Sites version and verify `/api/health`. A successful local
+build alone does not update either GitHub Actions or the public site.
 
 Before a release, also perform one manual search against current Intercity data
 through the built application. A carrier response-format change must produce

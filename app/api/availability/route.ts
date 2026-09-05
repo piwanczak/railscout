@@ -15,6 +15,7 @@ type AvailabilityPayload = {
   }>;
   numberOfPassengers?: number;
   bike?: boolean;
+  refresh?: boolean;
   ticketClass?: 1 | 2;
 };
 
@@ -98,6 +99,7 @@ export async function POST(request: Request) {
         numberOfPassengers,
         ticketClass,
         bike: Boolean(payload.bike),
+        refresh: payload.refresh === true,
       },
       deadline.signal,
     );

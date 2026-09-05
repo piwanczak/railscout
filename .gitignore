@@ -5,6 +5,8 @@
 
 # testing
 /coverage
+/test-results/
+/playwright-report/
 
 # builds
 /.next/
@@ -20,6 +22,7 @@
 
 # debug
 npm-debug.log*
+/debug.log
 
 # local configuration
 .env*

@@ -1646,7 +1646,9 @@ footer a {
   }
 
   .availability-summary > small {
-    display: none;
+    display: block;
+    flex-basis: 100%;
+    font-size: .875rem;
   }
 
   .availability-action,
@@ -1839,3 +1841,17 @@ footer a {
     gap: 5px;
   }
 }
+/* Secondary controls use the same visible focus treatment as form controls. */
+.secondary-button {
+  font: inherit;
+  font-size: .875rem;
+  padding: .65rem .9rem;
+  border: 1px solid currentColor;
+  border-radius: .4rem;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.secondary-button:disabled { opacity: .5; cursor: default; }
+.secondary-button:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }
+.segment-seat a { display: inline-block; margin-top: .65rem; font-size: .875rem; }

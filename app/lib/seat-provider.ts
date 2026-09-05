@@ -11,6 +11,7 @@ import {
   summariseExactAvailability,
 } from "./eic-availability.mjs";
 import { BoundedTtlCache } from "./ttl-cache";
+import { buildEicBookingUrl } from "./eic";
 
 export type TrainStationStop = {
   id: number;
@@ -33,6 +34,7 @@ export type SeatInventoryRequest = {
   numberOfPassengers: number;
   ticketClass: 1 | 2;
   bike: boolean;
+  refresh?: boolean;
 };
 
 type InventoryState = "available" | "unavailable" | "unknown";
@@ -40,6 +42,7 @@ type InventoryState = "available" | "unavailable" | "unknown";
 type SegmentInventory = {
   state: InventoryState;
   seats: ExactSeat[];
+  complete?: boolean;
 };
 
 type SegmentOutcome = SegmentInventory & {
@@ -50,6 +53,7 @@ type SegmentOutcome = SegmentInventory & {
   timeFrom: string;
   timeTo: string;
   freeSeats: number;
+  freeSeatsIsLowerBound?: boolean;
 };
 
 type GrmComposition = {
@@ -101,8 +105,31 @@ const OUTBOUND_INTERVAL_MILLISECONDS = positiveIntegerSetting(
 const CACHE_MILLISECONDS = 90_000;
 const MAX_COMPOSITION_BYTES = 256 * 1024;
 const MAX_SEAT_MAP_BYTES = 2 * 1024 * 1024;
-const responseCache = new BoundedTtlCache<unknown>(512);
-const inFlightRequests = new Map<string, Promise<unknown>>();
+type CachedMap = { payload: unknown; checkedAt: number };
+type LookupTrace = { oldestCheckedAt: number; cacheHits: number; queueWaitMs: number; upstreamRequests: number; refresh: boolean };
+const responseCache = new BoundedTtlCache<CachedMap>(512);
+type SharedRequest = { promise: Promise<CachedMap>; controller: AbortController; users: number };
+const inFlightRequests = new Map<string, SharedRequest>();
+
+function joinRequest(shared: SharedRequest, signal?: AbortSignal): Promise<CachedMap> {
+  shared.users += 1;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown, value?: CachedMap) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      shared.users -= 1;
+      if (shared.users === 0) shared.controller.abort();
+      if (error) reject(error);
+      else resolve(value!);
+    };
+    const onAbort = () => finish(abortError());
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    shared.promise.then(value => finish(undefined, value), error => finish(error));
+  });
+}
 type OutboundJob<T = unknown> = {
   task: () => Promise<T>;
   resolve: (value: T) => void;
@@ -193,10 +220,17 @@ async function fetchWithTimeout(
   else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
 
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       headers: grmHeaders(format),
       signal: controller.signal,
     });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new ProviderUnavailableError(`Seat-map service returned ${response.status}`, response.status);
+    }
+    const text = await readBoundedResponse(response,
+      format === "json" ? MAX_COMPOSITION_BYTES : MAX_SEAT_MAP_BYTES);
+    return { payload: format === "json" ? JSON.parse(text) as unknown : text, checkedAt: Date.now() };
   } finally {
     clearTimeout(timeout);
     parentSignal?.removeEventListener("abort", abortFromParent);
@@ -250,6 +284,7 @@ async function readBoundedResponse(response: Response, maximumBytes: number) {
     Number.isFinite(declaredLength) &&
     declaredLength > maximumBytes
   ) {
+    await response.body?.cancel();
     throw new ProviderUnavailableError("Seat-map response is too large");
   }
 
@@ -334,18 +369,35 @@ async function fetchGrm(
   url: string,
   format: "json" | "text",
   signal?: AbortSignal,
+  trace?: LookupTrace,
 ) {
+  if (signal?.aborted) throw abortError();
   const cacheKey = `${format}:${url}`;
-  const cached = responseCache.get(cacheKey);
-  if (cached !== undefined) return cached;
+  const observe = (entry: CachedMap) => {
+    if (trace) trace.oldestCheckedAt = Math.min(trace.oldestCheckedAt, entry.checkedAt);
+    return entry.payload;
+  };
+  const cached = trace?.refresh ? undefined : responseCache.get(cacheKey);
+  if (cached !== undefined) {
+    if (trace) trace.cacheHits += 1;
+    return observe(cached);
+  }
   const inFlight = inFlightRequests.get(cacheKey);
-  if (inFlight) return inFlight;
+  if (inFlight && !inFlight.controller.signal.aborted) return observe(await joinRequest(inFlight, signal));
 
+  const queuedAt = Date.now();
+  const controller = new AbortController();
   const request = withOutboundSlot(async () => {
-    let response: Response;
+    if (trace) {
+      trace.queueWaitMs += Date.now() - queuedAt;
+      trace.upstreamRequests += 1;
+    }
     try {
-      response = await fetchWithTimeout(url, format, signal);
+      const entry = await fetchWithTimeout(url, format, controller.signal);
+      responseCache.set(cacheKey, entry, CACHE_MILLISECONDS);
+      return entry;
     } catch (error) {
+      if (error instanceof ProviderUnavailableError) throw error;
       throw new ProviderUnavailableError(
         error instanceof Error
           ? error.message
@@ -353,36 +405,13 @@ async function fetchGrm(
       );
     }
 
-    if (response.status === 429 || response.status >= 500) {
-      throw new ProviderUnavailableError(
-        `Seat-map service returned ${response.status}`,
-        response.status,
-      );
-    }
-    if (response.status === 401 || response.status === 403) {
-      throw new ProviderUnavailableError(
-        `Seat-map service rejected the request with ${response.status}`,
-        response.status,
-      );
-    }
-    if (!response.ok) return null;
+  }, controller.signal).finally(() => {
+    if (inFlightRequests.get(cacheKey) === shared) inFlightRequests.delete(cacheKey);
+  });
 
-    try {
-      const text = await readBoundedResponse(
-        response,
-        format === "json" ? MAX_COMPOSITION_BYTES : MAX_SEAT_MAP_BYTES,
-      );
-      const payload = format === "json" ? (JSON.parse(text) as unknown) : text;
-      responseCache.set(cacheKey, payload, CACHE_MILLISECONDS);
-      return payload;
-    } catch (error) {
-      if (error instanceof ProviderUnavailableError) throw error;
-      return null;
-    }
-  }, signal).finally(() => inFlightRequests.delete(cacheKey));
-
-  inFlightRequests.set(cacheKey, request);
-  return request;
+  const shared: SharedRequest = { promise: request, controller, users: 0 };
+  inFlightRequests.set(cacheKey, shared);
+  return observe(await joinRequest(shared, signal));
 }
 
 function stringList(value: unknown) {
@@ -442,6 +471,8 @@ async function lookupInventory(
   from: TrainStationStop,
   to: TrainStationStop,
   signal?: AbortSignal,
+  complete = false,
+  trace?: LookupTrace,
 ): Promise<SegmentInventory> {
   const fromCodes = getEicStationCodes(from.id);
   const toCodes = getEicStationCodes(to.id);
@@ -458,6 +489,7 @@ async function lookupInventory(
     }),
     "json",
     signal,
+    trace,
   );
   if (!compositionPayload || typeof compositionPayload !== "object") {
     return { state: "unknown", seats: [] };
@@ -518,41 +550,39 @@ async function lookupInventory(
       }),
       "text",
       signal,
+      trace,
     );
     const parsed = parseGrmSeatMap(svg, {
       wagon,
       ticketClass: input.ticketClass,
       bike: input.bike,
     });
-    if (!parsed || parsed.eligiblePlaces === 0) {
+    if (!parsed || !parsed.complete || parsed.eligiblePlaces === 0) {
       incompleteMaps = true;
       return [] as ExactSeat[];
     }
     return parsed.seats as ExactSeat[];
   };
 
-  if (input.numberOfPassengers === 1) {
+  if (!complete && input.numberOfPassengers === 1) {
     for (const wagon of relevantWagons) {
       const [firstSeat] = sortExactSeats(await fetchWagonSeats(wagon));
-      if (firstSeat) return { state: "available", seats: [firstSeat] };
+      if (firstSeat) return { state: "available", seats: [firstSeat], complete: false };
     }
     return incompleteMaps
       ? { state: "unknown", seats: [] }
       : { state: "unavailable", seats: [] };
   }
 
-  const mapResults = await mapLimit(
-    relevantWagons,
-    MAP_CONCURRENCY,
-    fetchWagonSeats,
-  );
-
-  const seats = sortExactSeats(mapResults.flat()) as ExactSeat[];
-  if (seats.length >= input.numberOfPassengers) {
-    return { state: "available", seats };
+  const seats: ExactSeat[] = [];
+  for (const wagon of relevantWagons) {
+    seats.push(...(await fetchWagonSeats(wagon)));
+    if (!complete && seats.length >= input.numberOfPassengers) {
+      return { state: "available", seats: sortExactSeats(seats), complete: false };
+    }
   }
   if (incompleteMaps) return { state: "unknown", seats };
-  return { state: "unavailable", seats };
+  return { state: seats.length >= input.numberOfPassengers ? "available" : "unavailable", seats: sortExactSeats(seats), complete: true };
 }
 
 function outcomeFor(
@@ -573,6 +603,7 @@ function outcomeFor(
     state: inventory.state,
     seats: inventory.seats.slice(0, numberOfPassengers),
     freeSeats: inventory.seats.length,
+    freeSeatsIsLowerBound: inventory.complete === false,
   };
 }
 
@@ -584,6 +615,8 @@ export async function fetchSeatAvailability(
   input: SeatInventoryRequest,
   signal?: AbortSignal,
 ) {
+  const startedAt = Date.now();
+  const trace: LookupTrace = { oldestCheckedAt: Infinity, cacheHits: 0, queueWaitMs: 0, upstreamRequests: 0, refresh: input.refresh === true };
   const stationIds = input.stationStops.map((stop) => stop.id);
   const first = input.stationStops[0];
   const last = input.stationStops.at(-1);
@@ -615,7 +648,7 @@ export async function fetchSeatAvailability(
 
   let directInventory = unknownLeg();
   try {
-    directInventory = await lookupInventory(input, first, last, signal);
+    directInventory = await lookupInventory(input, first, last, signal, false, trace);
   } catch (error) {
     reportLookupFailure(error);
   }
@@ -649,6 +682,8 @@ export async function fetchSeatAvailability(
             from,
             input.stationStops[index + 1],
             signal,
+            true,
+            trace,
           );
         } catch (error) {
           reportLookupFailure(error);
@@ -665,9 +700,18 @@ export async function fetchSeatAvailability(
     directOutcome,
   }) as SegmentOutcome[];
   const summary = summariseExactAvailability({ stationIds, outcomes });
+  console.info(JSON.stringify({ event: "availability_lookup", status: summary.status,
+    durationMs: Date.now() - startedAt, ...trace, providerUnavailable }));
 
   return {
     ...summary,
+    segments: summary.segments.map((segment) => ({ ...segment,
+      bookingUrl: buildEicBookingUrl({ originStationId: segment.from,
+        destinationStationId: segment.to, departure: segment.timeFrom }),
+    })),
+    checkedAt: Number.isFinite(trace.oldestCheckedAt) ? new Date(trace.oldestCheckedAt).toISOString() : undefined,
+    cacheMaxAgeSeconds: CACHE_MILLISECONDS / 1000,
+    seatCountIsLowerBound: summary.segments.some((segment) => (segment as SegmentOutcome).freeSeatsIsLowerBound),
     inventorySource: "PKP Intercity GRM",
     retryable: providerUnavailable && retryableFailure,
     retryAfterMs:

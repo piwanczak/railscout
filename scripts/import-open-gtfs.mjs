@@ -61,6 +61,7 @@ export async function importFeed(directory, options = {}) {
   ]);
 
   const routeById = new Map(routes.map((route) => [route.route_id, route]));
+  const stopById = new Map(stops.map((stop) => [stop.stop_id, stop]));
   const intercityTrips = trips.filter(
     (trip) => trip.route_id.startsWith("IC_") && !trip.route_id.endsWith("_BUS"),
   );
@@ -92,10 +93,11 @@ export async function importFeed(directory, options = {}) {
     const tripId = values[column.trip_id];
     if (!tripById.has(tripId)) continue;
 
-    const stationId = Number(values[column.stop_id]);
+    const stop = stopById.get(values[column.stop_id]);
+    const stationId = Number(stop?.parent_station || stop?.stop_id);
     const arrival = toMinutes(values[column.arrival_time]);
     const departure = toMinutes(values[column.departure_time]);
-    if (!Number.isInteger(stationId) || arrival === null || departure === null) continue;
+    if (!Number.isInteger(stationId) || stationId <= 0 || arrival === null || departure === null) continue;
 
     const tripStops = stopTimesByTrip.get(tripId) ?? [];
     tripStops.push([
@@ -148,6 +150,9 @@ export async function importFeed(directory, options = {}) {
       .map(([service, dates]) => [service, [...dates].sort()]),
   );
   const allDates = Object.values(serviceDatesOutput).flat();
+  if (!tripsOutput.length || !stationsOutput.length || !allDates.length) {
+    throw new Error("Feed has no usable Intercity timetable. Existing files were not changed.");
+  }
   const plkAttribution = attributions.find((row) => row.attribution_id === "PLK");
   const makerAttribution = attributions.find((row) => row.attribution_id === "MK");
   const generatedMatch = attributions
@@ -176,9 +181,10 @@ export async function importFeed(directory, options = {}) {
     ],
     serviceDates: serviceDatesOutput,
     trips: tripsOutput,
+    stations: stationsOutput,
   };
 
-  const workspaceRoot = path.resolve(import.meta.dirname, "..");
+  const workspaceRoot = path.resolve(options.outputRoot ?? path.resolve(import.meta.dirname, ".."));
   const timetableDirectory = path.join(workspaceRoot, "app", "data");
   await mkdir(timetableDirectory, { recursive: true });
   const provenancePath = path.join(timetableDirectory, "provenance.json");

@@ -117,6 +117,10 @@ async function requestBody(request) {
 }
 
 const server = createServer(async (nodeRequest, nodeResponse) => {
+  const controller = new AbortController();
+  nodeResponse.once("close", () => {
+    if (!nodeResponse.writableEnded) controller.abort();
+  });
   try {
     const authority = nodeRequest.headers.host ?? `${host}:${port}`;
     const url = new URL(nodeRequest.url ?? "/", `http://${authority}`);
@@ -128,6 +132,7 @@ const server = createServer(async (nodeRequest, nodeResponse) => {
     const init = {
       headers: new Headers(nodeRequest.headers),
       method,
+      signal: controller.signal,
     };
 
     if (method !== "GET" && method !== "HEAD") {

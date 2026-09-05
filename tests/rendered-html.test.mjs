@@ -14,8 +14,10 @@ import {
   everySegment,
   findAvailabilityPlan,
 } from "../app/lib/seat-planner.mjs";
+import { addDays, gtfsTimestamp, warsawDate } from "../app/lib/rail-time.mjs";
 
 const templateRoot = new URL("../", import.meta.url);
+process.env.TIMETABLE_SNAPSHOT_URL = "off";
 const previewRoot = new URL("../app/_sites-preview/", import.meta.url);
 const mockGrmRequests = [];
 
@@ -50,6 +52,18 @@ const mockGrmServer = createServer((request, response) => {
     userAgent: request.headers["user-agent"],
     secFetchSite: request.headers["sec-fetch-site"],
   });
+
+  if (request.url?.includes("/IC/2222/") && request.url.includes("/wagon/svg/")) {
+    const pair = request.url.split("/").slice(-2).join("/");
+    const seats = {
+      "5100001/5100846": [1, 9],
+      "5100846/8100149": [2, 9],
+      "8100149/5100783": [3],
+    }[pair] ?? [];
+    response.writeHead(200, { "Content-Type": "image/svg+xml" });
+    response.end(wagonSvg(seats.length ? seats.map(seat => ({ seat: String(seat), status: "1" })) : [{ seat: "1", status: "3" }]));
+    return;
+  }
 
   if (request.url?.includes("/IC/9999/")) {
     response.writeHead(503, { "Content-Type": "application/json" });
@@ -88,6 +102,27 @@ const mockGrmServer = createServer((request, response) => {
         wagonySchemat: {
           3: "2061,WITHOUT_COMPARTMENTS",
           4: "2061,WITHOUT_COMPARTMENTS",
+        },
+      }),
+    );
+    return;
+  }
+
+  if (
+    request.url?.includes("/IC/5555/") &&
+    request.url.includes("/sklad/wbnet/")
+  ) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        ...composition,
+        wagony: [3, 4, 5],
+        klasa2: [3, 4, 5],
+        wagonyUdogodnienia: { 3: ["302"], 4: ["302"], 5: ["302"] },
+        wagonySchemat: {
+          3: "2061,WITHOUT_COMPARTMENTS",
+          4: "2061,WITHOUT_COMPARTMENTS",
+          5: "2061,WITHOUT_COMPARTMENTS",
         },
       }),
     );
@@ -137,8 +172,9 @@ const mockGrmServer = createServer((request, response) => {
     const isDirectWarsawKrakow = request.url.endsWith("/5100136/5100051");
     const isReferenceTrain = request.url.includes("/IC/5330/");
     const isSingleSeatTrain = request.url.includes("/IC/4444/");
+    const isMultiPassengerTrain = request.url.includes("/IC/5555/");
     const isKarpatyRegression = request.url.includes("/TLK/53170/24/");
-    const places = isReferenceTrain || isSingleSeatTrain || isKarpatyRegression
+    const places = isReferenceTrain || isSingleSeatTrain || isMultiPassengerTrain || isKarpatyRegression
       ? [
           { seat: "104", status: "1" },
           { seat: "108", status: "3" },
@@ -239,7 +275,7 @@ test("ships independent data and no consumer-site endpoint", async () => {
     readFile(new URL("../app/api/trains/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/availability/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/seat-provider.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/seat-sweep-app.tsx", import.meta.url), "utf8"),
+    Promise.all([readFile(new URL("../app/seat-sweep-app.tsx", import.meta.url), "utf8"), readFile(new URL("../app/lib/check-trains.ts", import.meta.url), "utf8")]).then(parts => parts.join("\n")),
     readFile(new URL("../app/data/ic-timetable.json", import.meta.url), "utf8"),
   ]);
 
@@ -423,6 +459,38 @@ test("the planner prefers one ticket, then the plan with more spare seats", () =
   );
 });
 
+test("availability retains later seats when finding the fewest ticket sections", async () => {
+  const response = await appFetch("/api/availability", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category: "IC", trainNumber: "2222", ticketClass: 2, numberOfPassengers: 1,
+      stationStops: [21501, 76273, 1091, 12963].map((id, i) => ({ id,
+        arrival: `2026-09-05T${10 + i}:00:00+02:00`, departure: `2026-09-05T${10 + i}:00:00+02:00` })),
+    }),
+  });
+  const data = await response.json();
+  assert.equal(data.status, "available");
+  assert.equal(data.segments.length, 2);
+  assert.equal(data.segments[0].seats[0].seat, "9");
+  assert.equal(data.segments[0].to, 1091);
+  assert.ok(Number.isFinite(Date.parse(data.checkedAt)));
+});
+
+test("availability refresh bypasses the short map cache", async () => {
+  const payload = { category: "IC", trainNumber: "5330", ticketClass: 2, numberOfPassengers: 1,
+    stationStops: [33605, 80416].map((id, i) => ({ id,
+      arrival: `2026-09-06T${10 + i}:00:00+02:00`, departure: `2026-09-06T${10 + i}:00:00+02:00` })) };
+  const run = refresh => appFetch("/api/availability", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, refresh }) }).then(r => r.json());
+  mockGrmRequests.length = 0;
+  const first = await run(false);
+  const count = mockGrmRequests.length;
+  const cached = await run(false);
+  assert.equal(mockGrmRequests.length, count);
+  assert.equal(cached.checkedAt, first.checkedAt);
+  await run(true);
+  assert.ok(mockGrmRequests.length > count);
+});
+
 test("the planner handles routes that visit the same station twice", () => {
   const plan = findAvailabilityPlan({
     stationIds: [10, 20, 10, 40],
@@ -460,13 +528,20 @@ test("the planner handles routes that visit the same station twice", () => {
 });
 
 test("returns connection-specific e-IC links and a safe unknown inventory state", async () => {
+  const snapshot = JSON.parse(await readFile(new URL("../app/data/ic-timetable.json", import.meta.url), "utf8"));
+  const trip = snapshot.trips.find(trip => {
+    const from = trip.stops.findIndex(stop => stop[0] === 33605);
+    return from >= 0 && trip.stops[from][2] < 1440 && trip.stops.slice(from + 1).some(stop => stop[0] === 80416);
+  });
+  assert.ok(trip);
+  const serviceDate = snapshot.serviceDates[trip.service][0];
   const trainsResponse = await appFetch("/api/trains", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       startStationId: 33605,
       endStationId: 80416,
-      startDateTime: "2026-07-26T13:00:00+02:00",
+      startDateTime: `${serviceDate}T00:00:00+02:00`,
     }),
   });
   assert.equal(trainsResponse.status, 200);
@@ -499,6 +574,23 @@ test("returns connection-specific e-IC links and a safe unknown inventory state"
   assert.equal(availabilityPayload.status, "unknown");
   assert.equal(availabilityPayload.totalSegments, 1);
   assert.equal(availabilityPayload.unknownSegments, 1);
+});
+
+test("snapshot search returns an overnight train on its actual boarding date", async () => {
+  const snapshot = JSON.parse(await readFile(new URL("../app/data/ic-timetable.json", import.meta.url), "utf8"));
+  const trip = snapshot.trips.find(trip => trip.stops.slice(0, -1).some(stop => stop[2] >= 1440));
+  assert.ok(trip);
+  const from = trip.stops.findIndex(stop => stop[2] >= 1440);
+  const serviceDate = snapshot.serviceDates[trip.service].find(date => addDays(date, 1) <= snapshot.validThrough);
+  assert.ok(serviceDate);
+  const departure = gtfsTimestamp(serviceDate, trip.stops[from][2]);
+  const response = await appFetch("/api/trains", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ startStationId: trip.stops[from][0], endStationId: trip.stops[from + 1][0],
+      startDateTime: `${warsawDate(departure)}T00:00:00+02:00` }) });
+  const data = await response.json();
+  const result = data.trains.find(train => train.uuid === `gtfs-${trip.id}-${serviceDate}`);
+  assert.ok(result);
+  assert.equal(result.departure, departure);
 });
 
 test("availability API returns the exact reference seat from official-style GRM maps", async () => {
@@ -574,6 +666,43 @@ test("a one-passenger lookup stops after the first wagon with a free seat", asyn
   assert.ok(
     mockGrmRequests.every(
       (request) => !request.url?.includes("/wagon/svg/wbnet/IC/4444/4/"),
+    ),
+  );
+});
+
+test("a multi-passenger lookup stops after finding enough exact seats", async () => {
+  mockGrmRequests.length = 0;
+  const response = await appFetch("/api/availability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      category: "IC",
+      trainNumber: "5555",
+      stationStops: [
+        { id: 33605, arrival: "2026-07-27T10:08:00+02:00", departure: "2026-07-27T10:08:00+02:00" },
+        { id: 80416, arrival: "2026-07-27T14:39:00+02:00", departure: "2026-07-27T14:39:00+02:00" },
+      ],
+      numberOfPassengers: 2,
+      ticketClass: 2,
+      bike: false,
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.status, "available");
+  assert.equal(payload.minimumFreeSeats, 2);
+  assert.deepEqual(
+    payload.segments[0].seats.map(({ wagon, seat }) => ({ wagon, seat })),
+    [
+      { wagon: "3", seat: "104" },
+      { wagon: "4", seat: "104" },
+    ],
+  );
+  assert.equal(mockGrmRequests.length, 3);
+  assert.ok(
+    mockGrmRequests.every(
+      (request) => !request.url?.includes("/wagon/svg/wbnet/IC/5555/5/"),
     ),
   );
 });

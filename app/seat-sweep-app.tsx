@@ -2,226 +2,11 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type Station = {
-  id: number;
-  name: string;
-};
+import type { Station, Train, CheckState, ScheduleSource, SearchPhase, SortKey } from "./lib/search-types";
+import { TrainCard } from "./components/train-card";
+import { localDefaults, normaliseStationName, availableSeatCount, seatSwitches, statusRank, toIsoWithOffset, formatDate, formatTime, pluralConnections } from "./lib/search-view";
 
-type Train = {
-  uuid: string;
-  category: string;
-  trainNumber: string;
-  trainName: string;
-  departure: string;
-  arrival: string;
-  duration: number;
-  changes: number;
-  originStationId: number;
-  destinationStationId: number;
-  departurePlatform: string;
-  departureTrack: string;
-  arrivalPlatform: string;
-  arrivalTrack: string;
-  stops: number;
-  stationIds: number[];
-  stationStops: Array<{
-    id: number;
-    arrival: string;
-    departure: string;
-  }>;
-  bookingUrl: string | null;
-};
-
-type AvailabilitySegment = {
-  from: number;
-  to: number;
-  timeFrom: string;
-  timeTo: string;
-  freeSeats: number;
-  seats: Array<{
-    wagon: string;
-    seat: string;
-    label: string;
-  }>;
-};
-
-type CheckState = {
-  status:
-    | "queued"
-    | "checking"
-    | "available"
-    | "unavailable"
-    | "unknown"
-    | "error";
-  segments?: AvailabilitySegment[];
-  minimumFreeSeats?: number | null;
-  checkedSegments?: number;
-  unknownSegments?: number;
-  totalSegments?: number;
-  message?: string;
-};
-
-type ScheduleSource = {
-  mode: "official-live" | "open-snapshot";
-  label: string;
-  url: string;
-  generatedAt?: string;
-  validThrough?: string;
-};
-
-type SearchPhase = "idle" | "loading-trains" | "checking" | "done";
-type SortKey = "recommended" | "departure" | "seats" | "switches";
-
-const AVAILABILITY_TIMEOUT_MS = 32_000;
-const AVAILABILITY_RETRY_DELAY_MS = 1_000;
-const CONNECTION_CHECK_DELAY_MS = 750;
-const WARSAW_TIME_ZONE = "Europe/Warsaw";
-
-function pad(value: number) {
-  return String(value).padStart(2, "0");
-}
-
-function localDefaults() {
-  const rounded = new Date(
-    Math.ceil((Date.now() + 15 * 60_000) / (15 * 60_000)) * 15 * 60_000,
-  );
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: WARSAW_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(rounded);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((candidate) => candidate.type === type)?.value ?? "";
-
-  return {
-    date: `${part("year")}-${part("month")}-${part("day")}`,
-    time: `${part("hour")}:${part("minute")}`,
-  };
-}
-
-function toIsoWithOffset(date: string, time: string) {
-  const [year, month, day] = date.split("-").map(Number);
-  const [hour, minute] = time.split(":").map(Number);
-  const wallClock = Date.UTC(year, month - 1, day, hour, minute);
-  let instant = wallClock;
-  let offset = 0;
-
-  for (let iteration = 0; iteration < 2; iteration += 1) {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: WARSAW_TIME_ZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(instant));
-    const part = (type: Intl.DateTimeFormatPartTypes) =>
-      Number(parts.find((candidate) => candidate.type === type)?.value ?? 0);
-    const represented = Date.UTC(
-      part("year"),
-      part("month") - 1,
-      part("day"),
-      part("hour"),
-      part("minute"),
-      part("second"),
-    );
-    offset = Math.round((represented - instant) / 60_000);
-    instant = wallClock - offset * 60_000;
-  }
-
-  const sign = offset >= 0 ? "+" : "-";
-  const hours = pad(Math.floor(Math.abs(offset) / 60));
-  const minutes = pad(Math.abs(offset) % 60);
-  return `${date}T${time}:00.000${sign}${hours}:${minutes}`;
-}
-
-function normaliseStationName(value: string) {
-  return value.trim().toLocaleLowerCase("pl");
-}
-
-function formatTime(value: string) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("pl-PL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: WARSAW_TIME_ZONE,
-  }).format(new Date(value));
-}
-
-function formatDate(value: string) {
-  if (!value) return "";
-  return new Intl.DateTimeFormat("pl-PL", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: WARSAW_TIME_ZONE,
-  }).format(new Date(value));
-}
-
-function dateKey(value: string) {
-  if (!value) return "";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: WARSAW_TIME_ZONE,
-  }).formatToParts(new Date(value));
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((candidate) => candidate.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
-function formatShortDate(value: string) {
-  return new Intl.DateTimeFormat("pl-PL", {
-    day: "numeric",
-    month: "short",
-    timeZone: WARSAW_TIME_ZONE,
-  }).format(new Date(value));
-}
-
-function formatDuration(minutes: number) {
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return hours > 0 ? `${hours} h ${rest} min` : `${rest} min`;
-}
-
-function seatSwitches(check?: CheckState) {
-  if (!check?.segments?.length) return Number.POSITIVE_INFINITY;
-  return Math.max(0, check.segments.length - 1);
-}
-
-function availableSeatCount(check?: CheckState) {
-  return check?.minimumFreeSeats ?? -1;
-}
-
-function statusRank(check?: CheckState) {
-  return {
-    available: 0,
-    checking: 1,
-    queued: 2,
-    unavailable: 3,
-    unknown: 4,
-    error: 5,
-  }[check?.status ?? "queued"];
-}
-
-function pluralConnections(count: number) {
-  if (count === 1) return "połączenie";
-  if (count >= 2 && count <= 4) return "połączenia";
-  return "połączeń";
-}
-
-function freeSeatLabel(count: number) {
-  if (count === 1) return "1 wolne miejsce";
-  if (count >= 2 && count <= 4) return `${count} wolne miejsca`;
-  return `${count} wolnych miejsc`;
-}
+import { checkTrains, type SearchSettings } from "./lib/check-trains";
 
 export function SeatSweepApp() {
   const [stations, setStations] = useState<Station[]>([]);
@@ -232,6 +17,7 @@ export function SeatSweepApp() {
   const [ticketClass, setTicketClass] = useState<1 | 2>(2);
   const [numberOfPassengers, setNumberOfPassengers] = useState(1);
   const [bike, setBike] = useState(false);
+  const [submittedSettings, setSubmittedSettings] = useState({ ticketClass, numberOfPassengers, bike });
   const [phase, setPhase] = useState<SearchPhase>("idle");
   const [trains, setTrains] = useState<Train[]>([]);
   const [checks, setChecks] = useState<Record<string, CheckState>>({});
@@ -256,7 +42,7 @@ export function SeatSweepApp() {
     setDate(defaults.date);
     setTime(defaults.time);
 
-    fetch("/stations.json")
+    fetch("/api/stations")
       .then((response) => {
         if (!response.ok) throw new Error("Station catalogue unavailable");
         return response.json() as Promise<Station[]>;
@@ -343,153 +129,12 @@ export function SeatSweepApp() {
     setChecks((current) => ({ ...current, [uuid]: state }));
   }
 
-  async function checkEveryTrain(
-    candidates: Train[],
-    token: number,
-    controller: AbortController,
-  ) {
-    const wait = (milliseconds: number) => {
-      if (controller.signal.aborted) {
-        return Promise.reject(new DOMException("Search cancelled", "AbortError"));
-      }
-      return new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(finish, milliseconds);
-        const onAbort = () => {
-          clearTimeout(timeout);
-          controller.signal.removeEventListener("abort", onAbort);
-          reject(new DOMException("Search cancelled", "AbortError"));
-        };
-        function finish() {
-          controller.signal.removeEventListener("abort", onAbort);
-          resolve();
-        }
-        controller.signal.addEventListener("abort", onAbort, { once: true });
-      });
-    };
-
-    for (const [index, train] of candidates.entries()) {
-      if (token !== searchToken.current || controller.signal.aborted) return;
-
-      updateCheck(train.uuid, { status: "checking" });
-
-      try {
-        let response: Response | null = null;
-        let result: {
-          status?: "available" | "unavailable" | "unknown";
-          segments?: AvailabilitySegment[];
-          minimumFreeSeats?: number | null;
-          checkedSegments?: number;
-          unknownSegments?: number;
-          totalSegments?: number;
-          message?: string;
-          error?: string;
-          retryable?: boolean;
-          retryAfterMs?: number;
-        } = {};
-
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const attemptController = new AbortController();
-          let timedOut = false;
-          const abortAttempt = () =>
-            attemptController.abort(controller.signal.reason);
-          controller.signal.addEventListener("abort", abortAttempt, {
-            once: true,
-          });
-          const attemptTimeout = setTimeout(() => {
-            timedOut = true;
-            attemptController.abort(
-              new DOMException("Availability request timed out", "TimeoutError"),
-            );
-          }, AVAILABILITY_TIMEOUT_MS);
-
-          try {
-            response = await fetch("/api/availability", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-RailScout-Attempt": String(attempt + 1),
-              },
-              signal: attemptController.signal,
-              body: JSON.stringify({
-                category: train.category,
-                trainNumber: train.trainNumber,
-                stationStops: train.stationStops,
-                numberOfPassengers,
-                bike,
-                ticketClass,
-              }),
-            });
-            result = await response.json();
-          } catch (error) {
-            if (controller.signal.aborted) throw error;
-            if (!timedOut || attempt === 1) throw error;
-            result = {
-              retryable: true,
-              retryAfterMs: AVAILABILITY_RETRY_DELAY_MS,
-            };
-          } finally {
-            clearTimeout(attemptTimeout);
-            controller.signal.removeEventListener("abort", abortAttempt);
-          }
-
-          if (!result.retryable || attempt === 1) break;
-          await wait(result.retryAfterMs ?? AVAILABILITY_RETRY_DELAY_MS);
-        }
-
-        if (token !== searchToken.current) return;
-        if ((response && !response.ok) || result.error) {
-          updateCheck(train.uuid, {
-            status: "error",
-            message: result.error ?? "Sprawdzenie nie powiodło się.",
-          });
-        } else if (result.status === "available") {
-          updateCheck(train.uuid, {
-            status: "available",
-            segments: result.segments ?? [],
-            minimumFreeSeats: result.minimumFreeSeats,
-            checkedSegments: result.checkedSegments,
-            unknownSegments: result.unknownSegments,
-            totalSegments: result.totalSegments,
-          });
-        } else if (result.status === "unknown" || result.retryable) {
-          updateCheck(train.uuid, {
-            status: "unknown",
-            message:
-              result.message ?? "Dane o miejscach są chwilowo niedostępne.",
-            checkedSegments: result.checkedSegments,
-            unknownSegments: result.unknownSegments,
-            totalSegments: result.totalSegments,
-          });
-        } else {
-          updateCheck(train.uuid, {
-            status: "unavailable",
-            segments: [],
-            checkedSegments: result.checkedSegments,
-            totalSegments: result.totalSegments,
-          });
-        }
-      } catch {
-        if (controller.signal.aborted) return;
-        if (token === searchToken.current) {
-          updateCheck(train.uuid, {
-            status: "error",
-            message: "Brak odpowiedzi po ponownej próbie.",
-          });
-        }
-      }
-
-      if (index < candidates.length - 1) {
-        try {
-          await wait(CONNECTION_CHECK_DELAY_MS);
-        } catch {
-          return;
-        }
-      }
-    }
-
-    if (token === searchToken.current && !controller.signal.aborted) {
-      setPhase("done");
-    }
+  function checkEveryTrain(candidates: Train[], token: number, controller: AbortController,
+    settings: SearchSettings, refresh = false) {
+    return checkTrains({ candidates, controller, settings, refresh,
+      isCurrent: () => token === searchToken.current, updateCheck,
+      onDone: () => setPhase("done"),
+    });
   }
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
@@ -519,7 +164,11 @@ export function SeatSweepApp() {
     searchController.current = controller;
     const token = searchToken.current + 1;
     searchToken.current = token;
-    const dateTime = toIsoWithOffset(date, time);
+    let dateTime: string;
+    try { dateTime = toIsoWithOffset(date, time); }
+    catch (error) { setError(error instanceof Error ? error.message : "Nieprawidłowa godzina."); return; }
+    const settings = { ticketClass, numberOfPassengers, bike };
+    setSubmittedSettings(settings);
 
     setPhase("loading-trains");
     setTrains([]);
@@ -550,6 +199,7 @@ export function SeatSweepApp() {
         throw new Error(result.error ?? "Nie udało się pobrać połączeń.");
       }
 
+      if (token !== searchToken.current || controller.signal.aborted) return;
       const candidates = result.trains ?? [];
       setScheduleSource(result.source ?? null);
       setSourceWarning(result.warning ?? "");
@@ -574,11 +224,13 @@ export function SeatSweepApp() {
         candidates,
         token,
         controller,
+        settings,
       );
     } catch (searchError) {
       if (searchError instanceof Error && searchError.name === "AbortError") {
         return;
       }
+      if (token !== searchToken.current) return;
       setPhase("done");
       setError(
         searchError instanceof Error
@@ -586,6 +238,22 @@ export function SeatSweepApp() {
           : "Nie udało się rozpocząć wyszukiwania.",
       );
     }
+  }
+
+  function stopChecking() {
+    searchController.current?.abort();
+    searchToken.current += 1;
+    setChecks(current => Object.fromEntries(Object.entries(current).map(([id, check]) => [id,
+      ["queued", "checking"].includes(check.status) ? { status: "unknown", message: "Sprawdzanie zatrzymane." } : check])));
+    setPhase("stopped");
+  }
+
+  function retryTrain(train: Train) {
+    const controller = new AbortController();
+    searchController.current = controller;
+    const token = ++searchToken.current;
+    setPhase("checking");
+    void checkEveryTrain([train], token, controller, submittedSettings, true);
   }
 
   const isBusy = phase === "loading-trains" || phase === "checking";
@@ -771,6 +439,7 @@ export function SeatSweepApp() {
                   : "Znajdź wszystkie połączenia"}
               <span aria-hidden="true">→</span>
             </button>
+            {isBusy && <button type="button" className="secondary-button" onClick={stopChecking}>Zatrzymaj sprawdzanie</button>}
           </div>
         </form>
         {error && (
@@ -807,6 +476,7 @@ export function SeatSweepApp() {
                 <div
                   className="progress-track"
                   role="progressbar"
+                  aria-label="Postęp sprawdzania pociągów"
                   aria-valuemin={0}
                   aria-valuemax={progress.total}
                   aria-valuenow={progress.finished}
@@ -848,7 +518,7 @@ export function SeatSweepApp() {
                 [
                   ["recommended", "Najlepsze"],
                   ["departure", "Najwcześniej"],
-                  ["seats", "Najwięcej wolnych"],
+                  ["seats", "Najwięcej potwierdzonych"],
                   ["switches", "Najmniej zmian"],
                 ] as Array<[SortKey, string]>
               ).map(([value, label]) => (
@@ -885,8 +555,10 @@ export function SeatSweepApp() {
                 check={checks[train.uuid] ?? { status: "queued" }}
                 rank={index + 1}
                 stationById={stationById}
-                ticketClass={ticketClass}
-                numberOfPassengers={numberOfPassengers}
+                ticketClass={submittedSettings.ticketClass}
+                numberOfPassengers={submittedSettings.numberOfPassengers}
+                onRetry={() => retryTrain(train)}
+                retryDisabled={isBusy}
                 searchDateTime={searchedRoute.dateTime}
               />
             ))}
@@ -939,187 +611,5 @@ export function SeatSweepApp() {
         </span>
       </footer>
     </main>
-  );
-}
-
-function TrainCard({
-  train,
-  check,
-  rank,
-  stationById,
-  ticketClass,
-  numberOfPassengers,
-  searchDateTime,
-}: {
-  train: Train;
-  check: CheckState;
-  rank: number;
-  stationById: Map<number, Station>;
-  ticketClass: 1 | 2;
-  numberOfPassengers: number;
-  searchDateTime: string;
-}) {
-  const switches = seatSwitches(check);
-  const isAvailable = check.status === "available";
-  const isBest = rank === 1 && isAvailable;
-  const freeSeats = check.minimumFreeSeats ?? 0;
-  const firstSeat = check.segments?.[0]?.seats[0];
-  const departureDate =
-    dateKey(train.departure) === dateKey(searchDateTime)
-      ? ""
-      : formatShortDate(train.departure);
-  const arrivalDate =
-    dateKey(train.arrival) === dateKey(searchDateTime)
-      ? ""
-      : formatShortDate(train.arrival);
-  const routeLabel =
-    switches === 0
-      ? "Bez podziału trasy"
-      : switches === 1
-        ? "1 podział trasy"
-        : `${switches} podziały trasy`;
-
-  return (
-    <article className={`train-card status-${check.status} ${isBest ? "best" : ""}`}>
-      <div className="train-main">
-        <div className="train-identity">
-          {isBest && <span className="best-flag">NAJLEPSZY WYNIK</span>}
-          <small>{train.trainName}</small>
-          <strong>{train.trainNumber}</strong>
-        </div>
-
-        <div className="train-time">
-          <div>
-            <strong>{formatTime(train.departure)}</strong>
-            <small>
-              {departureDate ? `${departureDate} · ` : ""}
-              {train.departurePlatform
-                ? `peron ${train.departurePlatform}${train.departureTrack ? ` / tor ${train.departureTrack}` : ""}`
-                : "odjazd"}
-            </small>
-          </div>
-          <div className="time-rail" aria-label={formatDuration(train.duration)}>
-            <span />
-            <small>{formatDuration(train.duration)}</small>
-          </div>
-          <div>
-            <strong>{formatTime(train.arrival)}</strong>
-            <small>
-              {arrivalDate ? `${arrivalDate} · ` : ""}
-              {train.arrivalPlatform
-                ? `peron ${train.arrivalPlatform}${train.arrivalTrack ? ` / tor ${train.arrivalTrack}` : ""}`
-                : "przyjazd"}
-            </small>
-          </div>
-        </div>
-
-        <div className="availability-summary">
-          {check.status === "queued" && (
-            <span className="status-badge queued">W kolejce</span>
-          )}
-          {check.status === "checking" && (
-            <span className="status-badge checking">
-              <i aria-hidden="true" /> Sprawdzanie
-            </span>
-          )}
-          {check.status === "unavailable" && (
-            <span className="status-badge unavailable">Brak kombinacji</span>
-          )}
-          {check.status === "unknown" && (
-            <span className="status-badge unknown">Brak danych</span>
-          )}
-          {check.status === "error" && (
-            <span className="status-badge error">Nie sprawdzono</span>
-          )}
-          {isAvailable && (
-            <>
-              <span className="status-badge available">
-                {freeSeatLabel(freeSeats)}
-              </span>
-              <strong className="result-price">
-                {numberOfPassengers === 1 && switches === 0 && firstSeat
-                  ? `wagon ${firstSeat.wagon} · miejsce ${firstSeat.seat}`
-                  : `miejsca dla ${numberOfPassengers} os.`}
-              </strong>
-              <small>
-                {ticketClass} klasa · mapa miejsc e-IC
-              </small>
-            </>
-          )}
-        </div>
-      </div>
-
-      {check.status === "checking" && (
-        <div className="card-progress" aria-hidden="true">
-          <span />
-        </div>
-      )}
-
-      {!isAvailable && train.bookingUrl && check.status !== "checking" && (
-        <div className="availability-action">
-          <span>{train.category} {train.trainNumber} · odjazd {formatTime(train.departure)}</span>
-          <a href={train.bookingUrl} target="_blank" rel="noreferrer">
-            Pokaż ten pociąg w e-IC →
-          </a>
-        </div>
-      )}
-
-      {isAvailable && check.segments && (
-        <details className="seat-details" open={isBest}>
-          <summary>
-            <span>{routeLabel}</span>
-            <span>Zobacz miejsca</span>
-          </summary>
-          <div className="passenger-list">
-            <section className="passenger-route">
-              <div className="segment-list">
-                {check.segments.map((segment, segmentIndex) => {
-                  const from = stationById.get(segment.from)?.name ?? `Stacja ${segment.from}`;
-                  const to = stationById.get(segment.to)?.name ?? `Stacja ${segment.to}`;
-                  return (
-                    <div className="segment" key={`${segment.from}-${segment.to}-${segmentIndex}`}>
-                      <span className="segment-number">{segmentIndex + 1}</span>
-                      <div className="segment-route">
-                        <strong>
-                          {from} <span>→</span> {to}
-                        </strong>
-                        <small>
-                          {formatTime(segment.timeFrom)}–{formatTime(segment.timeTo)} · {ticketClass} klasa
-                        </small>
-                      </div>
-                      <div className="segment-seat">
-                        <strong>{freeSeatLabel(segment.freeSeats)}</strong>
-                        <div className="seat-chips" aria-label="Wolne miejsca">
-                          {segment.seats.map((seat) => (
-                            <span key={`${seat.wagon}-${seat.seat}`}>
-                              W{seat.wagon} · {seat.seat}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          </div>
-          <div className="details-footer">
-            <span>
-              Miejsca były wolne w chwili sprawdzenia. e-IC potwierdzi przydział
-              podczas zakupu.
-            </span>
-            {train.bookingUrl && (
-              <a href={train.bookingUrl} target="_blank" rel="noreferrer">
-                Kup ten pociąg w e-IC →
-              </a>
-            )}
-          </div>
-        </details>
-      )}
-
-      {["unknown", "error"].includes(check.status) && check.message && (
-        <p className="card-message">{check.message}</p>
-      )}
-    </article>
   );
 }

@@ -1,9 +1,11 @@
+import { warsawDate, warsawClock, gtfsTimestamp, boardingServices } from "./rail-time.mjs";
 import snapshotJson from "../data/ic-timetable.json";
 import {
   buildEicBookingUrl,
   normaliseEicCategory,
 } from "./eic";
 import { BoundedTtlCache } from "./ttl-cache";
+import { currentSnapshot } from "./snapshot-source";
 
 type SnapshotStop = [
   stationId: number,
@@ -22,7 +24,7 @@ type SnapshotTrip = {
   stops: SnapshotStop[];
 };
 
-type TimetableSnapshot = {
+export type TimetableSnapshot = {
   schemaVersion: 1;
   generatedAt: string;
   validFrom: string;
@@ -30,6 +32,7 @@ type TimetableSnapshot = {
   sources: Array<{ name: string; url: string }>;
   serviceDates: Record<string, string[]>;
   trips: SnapshotTrip[];
+  stations?: Array<{ id: number; name: string }>;
 };
 
 type PlkStation = {
@@ -116,18 +119,7 @@ const plkCache = new BoundedTtlCache<{
   source: ScheduleSource;
 }>(128);
 
-function datePart(value: string) {
-  return value.slice(0, 10);
-}
-
-function offsetPart(value: string) {
-  return value.match(/(?:Z|[+-]\d{2}:\d{2})$/)?.[0] ?? "Z";
-}
-
-function timestamp(date: string, minutes: number, offset: string) {
-  const midnight = Date.parse(`${date}T00:00:00${offset}`);
-  return new Date(midnight + Math.round(minutes * 60_000)).toISOString();
-}
+const datePart = warsawDate;
 
 function timeSpanMinutes(value?: string | null) {
   if (!value) return null;
@@ -161,17 +153,18 @@ function indexesForRoute(stationIds: number[], origin: number, destination: numb
   return null;
 }
 
-function snapshotCovers(date: string) {
-  return date >= snapshot.validFrom && date <= snapshot.validThrough;
+function snapshotCovers(date: string, data = snapshot) {
+  return date >= data.validFrom && date <= data.validThrough;
 }
 
 function searchSnapshot(input: {
   startStationId: number;
   endStationId: number;
   startDateTime: string;
-}) {
+}, snapshotData = snapshot) {
   const date = datePart(input.startDateTime);
-  if (!snapshotCovers(date)) {
+  const snapshot = snapshotData;
+  if (!snapshotCovers(date, snapshot)) {
     throw new TimetableError(
       "PLK_API_KEY_REQUIRED",
       `Lokalny rozkład obejmuje okres do ${snapshot.validThrough}. Dodaj klucz PLK_API_KEY, aby pobierać aktualne dane bezpośrednio z oficjalnego API PKP PLK.`,
@@ -179,9 +172,7 @@ function searchSnapshot(input: {
   }
 
   const requestedDeparture = Date.parse(input.startDateTime);
-  const offset = offsetPart(input.startDateTime);
   const trains = snapshot.trips.flatMap((trip) => {
-    if (!snapshot.serviceDates[trip.service]?.includes(date)) return [];
     const route = indexesForRoute(
       trip.stops.map((stop) => stop[0]),
       input.startStationId,
@@ -191,21 +182,22 @@ function searchSnapshot(input: {
 
     const origin = trip.stops[route.originIndex];
     const destination = trip.stops[route.destinationIndex];
-    const departure = timestamp(date, origin[2], offset);
-    const arrival = timestamp(date, destination[1], offset);
+    return boardingServices(snapshot.serviceDates[trip.service] ?? [], date, origin[2]).flatMap((serviceDate) => {
+    const departure = gtfsTimestamp(serviceDate, origin[2]);
+    const arrival = gtfsTimestamp(serviceDate, destination[1]);
     if (Date.parse(departure) < requestedDeparture) return [];
     const category = normaliseEicCategory(trip.category);
     const stationStops = trip.stops
       .slice(route.originIndex, route.destinationIndex + 1)
       .map((stop) => ({
         id: stop[0],
-        arrival: timestamp(date, stop[1], offset),
-        departure: timestamp(date, stop[2], offset),
+        arrival: gtfsTimestamp(serviceDate, stop[1]),
+        departure: gtfsTimestamp(serviceDate, stop[2]),
       }));
 
     return [
       {
-        uuid: `gtfs-${trip.id}-${date}`,
+        uuid: `gtfs-${trip.id}-${serviceDate}`,
         category,
         trainNumber: trip.number || "—",
         trainName: [trip.category, trip.name].filter(Boolean).join(" ") || "PKP Intercity",
@@ -229,6 +221,7 @@ function searchSnapshot(input: {
         }),
       },
     ];
+    });
   });
 
   trains.sort((left, right) => Date.parse(left.departure) - Date.parse(right.departure));
@@ -280,7 +273,6 @@ async function searchOfficialPlk(input: {
 
   const payload = (await response.json()) as PlkResponse;
   const requestedDeparture = Date.parse(input.startDateTime);
-  const offset = offsetPart(input.startDateTime);
   const trains = (payload.routes ?? []).flatMap((route) => {
     if (route.operatingDates?.length && !route.operatingDates.includes(date)) return [];
     const stations = [...(route.stations ?? [])].sort(
@@ -301,8 +293,8 @@ async function searchOfficialPlk(input: {
     const departureMinutes = Number(origin.departureDay ?? 0) * 1440 + departureClock;
     let arrivalMinutes = Number(destination.arrivalDay ?? 0) * 1440 + arrivalClock;
     if (arrivalMinutes < departureMinutes) arrivalMinutes += 1440;
-    const departure = timestamp(date, departureMinutes, offset);
-    const arrival = timestamp(date, arrivalMinutes, offset);
+    const departure = warsawClock(date, departureMinutes);
+    const arrival = warsawClock(date, arrivalMinutes);
     if (Date.parse(departure) < requestedDeparture) return [];
 
     const category =
@@ -335,8 +327,8 @@ async function searchOfficialPlk(input: {
       return [
         {
           id: Number(station.stationId),
-          arrival: timestamp(date, stopArrival, offset),
-          departure: timestamp(date, stopDeparture, offset),
+          arrival: warsawClock(date, stopArrival),
+          departure: warsawClock(date, stopDeparture),
         },
       ];
     });
@@ -389,14 +381,15 @@ export async function searchTimetable(input: {
   startDateTime: string;
 }) {
   const apiKey = process.env.PLK_API_KEY?.trim();
-  if (!apiKey) return searchSnapshot(input);
+  if (!apiKey) return searchSnapshot(input, await currentSnapshot(snapshot));
 
   try {
     return await searchOfficialPlk({ ...input, apiKey });
   } catch (error) {
-    if (!snapshotCovers(datePart(input.startDateTime))) throw error;
+    const current = await currentSnapshot(snapshot);
+    if (!snapshotCovers(datePart(input.startDateTime), current)) throw error;
     return {
-      ...searchSnapshot(input),
+      ...searchSnapshot(input, current),
       warning:
         error instanceof Error
           ? `Oficjalne API jest chwilowo niedostępne; pokazujemy lokalny snapshot. ${error.message}`
