@@ -36,7 +36,8 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
       - name: Download and import a fresh feed when it changed
-        run: npm run data:refresh -- --require-fresh
+        # A restored archive can be newer than the committed snapshot after a failed run.
+        run: npm run data:refresh -- --require-fresh --force-import
       - name: Verify source, build, tests, data, and licenses
         run: npm run check
       - name: Commit a changed generated snapshot

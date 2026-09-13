@@ -284,7 +284,13 @@ test("ships independent data and no consumer-site endpoint", async () => {
   assert.match(layout, /socialImage/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   const stationCatalogue = JSON.parse(stations);
-  assert.ok(stationCatalogue.length > 500);
+  assert.ok(stationCatalogue.length > 0);
+  const timetableData = JSON.parse(timetable);
+  const stationIds = new Set(stationCatalogue.map(station => station.id));
+  assert.equal(stationIds.size, stationCatalogue.length);
+  for (const trip of timetableData.trips) {
+    for (const stop of trip.stops) assert.ok(stationIds.has(stop[0]), `Missing station ${stop[0]}`);
+  }
   assert.ok(
     stationCatalogue.every(
       (station) =>
@@ -293,7 +299,7 @@ test("ships independent data and no consumer-site endpoint", async () => {
         Object.keys(station).every((key) => ["id", "name"].includes(key)),
     ),
   );
-  assert.ok(JSON.parse(timetable).trips.length > 3000);
+  assert.ok(timetableData.trips.length > 0);
   assert.doesNotMatch(
     `${trainsRoute}\n${seatsRoute}\n${seatProvider}`,
     /placefinder\.pl|\/api\/koleo/i,

@@ -89,7 +89,8 @@ The source feed is `polish_trains.zip` from
 [mkuran.pl/gtfs](https://mkuran.pl/gtfs/).
 
 The `Refresh GTFS snapshot` GitHub Actions workflow runs daily, restores the
-conditional-download cache, validates the complete project, and commits only
+conditional-download cache, imports the verified archive even when unchanged,
+validates the complete project, and commits only
 changed generated data and provenance. `npm run data:check` also rejects a
 snapshot with less than seven days of validity remaining; set
 `GTFS_MIN_VALIDITY_DAYS` only when intentionally changing that release gate.
@@ -100,6 +101,12 @@ fails and checks again after five minutes. An expired snapshot is never used
 for a date outside its validity window. The station catalogue is updated with
 the snapshot. Changes to the application code still require a Sites release.
 Supplying `PLK_API_KEY` uses the official live timetable API first.
+
+Refresh tests use dates from the imported service calendar and check that each
+trip station exists in the catalogue. They do not require a fixed station or
+trip count. This lets valid seasonal timetable changes pass the release checks.
+Re-importing an unchanged archive also repairs a snapshot left behind by a
+previous failed run.
 
 ## Seat inventory from Sites
 

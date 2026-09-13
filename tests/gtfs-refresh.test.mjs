@@ -94,6 +94,15 @@ test("GTFS refresh conditionally caches the archive and skips unchanged imports"
   assert.equal(imports.length, 1);
   assert.equal(requests[1]["if-none-match"], '"fixture-v1"');
 
+  // A failed previous job can leave a valid archive but no committed update.
+  const repaired = await refreshGtfs({
+    sourceUrl, cacheDirectory, importFeedImpl, retries: 0,
+    requireFresh: true, forceImport: true,
+  });
+  assert.equal(repaired.status, "unchanged");
+  assert.equal(repaired.imported, true);
+  assert.equal(imports.length, 2);
+
   const metadata = JSON.parse(
     await readFile(path.join(cacheDirectory, "metadata.json"), "utf8"),
   );

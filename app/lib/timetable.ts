@@ -167,7 +167,7 @@ function searchSnapshot(input: {
   if (!snapshotCovers(date, snapshot)) {
     throw new TimetableError(
       "PLK_API_KEY_REQUIRED",
-      `Lokalny rozkład obejmuje okres do ${snapshot.validThrough}. Dodaj klucz PLK_API_KEY, aby pobierać aktualne dane bezpośrednio z oficjalnego API PKP PLK.`,
+      `Rozkład jest dostępny od ${snapshot.validFrom} do ${snapshot.validThrough}. Wybierz datę z tego zakresu lub spróbuj ponownie później — dane są aktualizowane automatycznie.`,
     );
   }
 
