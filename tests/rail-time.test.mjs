@@ -17,6 +17,18 @@ test("rail times use Warsaw time and the GTFS noon anchor at clock changes", () 
   assert.throws(() => warsawClock("2026-03-29", 150), /zmiany czasu/);
 });
 
+test("midnight searches keep the boarding date in summer, winter, and at clock changes", () => {
+  for (const date of ["2026-07-10", "2026-11-09", "2026-03-29", "2026-10-25", "2026-10-26"]) {
+    assert.equal(warsawDate(warsawClock(date, 0)), date);
+    const serviceDate = new Date(Date.parse(`${date}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    const departure = gtfsTimestamp(serviceDate, 1503);
+    assert.deepEqual(boardingServices([serviceDate], warsawDate(departure), 1503), [serviceDate]);
+    assert.ok(Date.parse(departure) >= Date.parse(warsawClock(warsawDate(departure), 0)));
+  }
+  // A fixed summer offset selects the previous day during winter.
+  assert.equal(warsawDate("2026-11-09T00:00:00+02:00"), "2026-11-08");
+});
+
 test("unknown seat statuses and partial maps cannot prove no seats", () => {
   const parse = body => parseGrmSeatMap(`<svg>${body}</svg>`, { wagon: "3", ticketClass: 2, bike: false });
   const group = status => `<g aria-label="Miejsce 11 klasa 2"><image class="place" status="${status}" /></g>`;

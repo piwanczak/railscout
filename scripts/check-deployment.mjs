@@ -3,7 +3,7 @@ try {
   const response = await fetch(target, { signal: AbortSignal.timeout(15000), redirect: "error" });
   const health = await response.json();
   if (!response.ok || health.status !== "ok" || !(health.snapshot?.daysRemaining >= 7)) {
-    throw new Error("Deployed timetable needs attention");
+    throw new Error(`Deployed timetable needs attention: HTTP ${response.status}, status=${health.status}, validThrough=${health.snapshot?.validThrough}, daysRemaining=${health.snapshot?.daysRemaining}`);
   }
   console.log(`Deployed timetable is valid through ${health.snapshot.validThrough}.`);
 } catch (error) {

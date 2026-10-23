@@ -88,7 +88,7 @@ npm run data:import -- /path/to/extracted/polish_trains
 The source feed is `polish_trains.zip` from
 [mkuran.pl/gtfs](https://mkuran.pl/gtfs/).
 
-The `Refresh GTFS snapshot` GitHub Actions workflow runs daily, restores the
+The `Refresh GTFS snapshot` GitHub Actions workflow runs every six hours, restores the
 conditional-download cache, imports the verified archive even when unchanged,
 validates the complete project, and commits only
 changed generated data and provenance. `npm run data:check` also rejects a
@@ -106,7 +106,8 @@ Refresh tests use dates from the imported service calendar and check that each
 trip station exists in the catalogue. They do not require a fixed station or
 trip count. This lets valid seasonal timetable changes pass the release checks.
 Re-importing an unchanged archive also repairs a snapshot left behind by a
-previous failed run.
+previous failed run. Search tests use Warsaw local midnight for each service
+date. A fixed summer offset must not be used for winter timetable tests.
 
 ## Seat inventory from Sites
 
@@ -174,7 +175,10 @@ purchase checks. GTFS service dates and clock changes follow the
 
 `GET /api/health` returns 503 when the current snapshot has fewer than seven
 days of validity remaining. The `Check deployed timetable` workflow checks
-the public deployment every six hours. Run `npm run monitor:deployment` for an
+the public deployment every six hours. A failed health check requests a new
+refresh on the default branch. All refresh checks must still pass before data
+is published. The monitor stays failed so GitHub can report the incident; a
+later health check must confirm recovery. Run `npm run monitor:deployment` for an
 immediate check. `SITE_HEALTH_URL` can select another deployment.
 
 Server logs contain JSON events for `snapshot_refresh`, `snapshot_health`, and
@@ -183,7 +187,7 @@ outbound request count, cache hits, and provider failure state. They do not
 include tokens or passenger identities. Use the hosting log service to track
 these events. GitHub reports a failed refresh or health workflow in Actions.
 
-The daily refresh and health workflows must be enabled on the repository's
+The refresh and health workflows must be enabled on the repository's
 default branch. Commit and push the tested source there, verify the refresh
 run, then publish the Sites version and verify `/api/health`. A successful local
 build alone does not update either GitHub Actions or the public site.

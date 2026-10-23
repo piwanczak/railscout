@@ -14,7 +14,7 @@ import {
   everySegment,
   findAvailabilityPlan,
 } from "../app/lib/seat-planner.mjs";
-import { addDays, gtfsTimestamp, warsawDate } from "../app/lib/rail-time.mjs";
+import { addDays, gtfsTimestamp, warsawClock, warsawDate } from "../app/lib/rail-time.mjs";
 
 const templateRoot = new URL("../", import.meta.url);
 process.env.TIMETABLE_SNAPSHOT_URL = "off";
@@ -547,7 +547,7 @@ test("returns connection-specific e-IC links and a safe unknown inventory state"
     body: JSON.stringify({
       startStationId: 33605,
       endStationId: 80416,
-      startDateTime: `${serviceDate}T00:00:00+02:00`,
+      startDateTime: warsawClock(serviceDate, 0),
     }),
   });
   assert.equal(trainsResponse.status, 200);
@@ -592,7 +592,8 @@ test("snapshot search returns an overnight train on its actual boarding date", a
   const departure = gtfsTimestamp(serviceDate, trip.stops[from][2]);
   const response = await appFetch("/api/trains", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ startStationId: trip.stops[from][0], endStationId: trip.stops[from + 1][0],
-      startDateTime: `${warsawDate(departure)}T00:00:00+02:00` }) });
+      startDateTime: warsawClock(warsawDate(departure), 0) }) });
+  assert.equal(response.status, 200);
   const data = await response.json();
   const result = data.trains.find(train => train.uuid === `gtfs-${trip.id}-${serviceDate}`);
   assert.ok(result);

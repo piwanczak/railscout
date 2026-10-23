@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: write
 jobs:
   health:
     runs-on: ubuntu-latest
@@ -14,4 +15,14 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.18.0
-      - run: node scripts/check-deployment.mjs
+      - name: Check deployed timetable
+        id: health
+        run: node scripts/check-deployment.mjs
+      - name: Request a verified refresh after a failed health check
+        if: failure() && steps.health.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh workflow run refresh-gtfs.yml --ref "${{ github.event.repository.default_branch }}"
+          echo "Health check failed. Requested a GTFS refresh. The refresh must pass all checks before it can publish data. This monitor remains failed until a later check confirms recovery." >> "$GITHUB_STEP_SUMMARY"

@@ -2,7 +2,7 @@ name: Refresh GTFS snapshot
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3,9,15,21 * * *"
   workflow_dispatch:
 
 permissions:
