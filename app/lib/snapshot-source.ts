@@ -40,7 +40,8 @@ export async function currentSnapshot(bundled: TimetableSnapshot): Promise<Timet
     try {
       const url = new URL(source);
       if (url.protocol !== "https:") throw new Error("Snapshot source requires HTTPS");
-      const response = await fetch(url, { signal: AbortSignal.timeout(5000), redirect: "error" });
+      // Workers supports manual redirects. The status check rejects every 3xx response.
+      const response = await fetch(url, { signal: AbortSignal.timeout(5000), redirect: "manual" });
       if (!response.ok) throw new Error(`Snapshot source returned ${response.status}`);
       const reader = response.body?.getReader();
       if (!reader) throw new Error("Snapshot source has no body");

@@ -98,7 +98,9 @@ After this version is deployed, the server checks the repository snapshot at
 most once an hour per running instance. It accepts only valid data that is at
 least as new as its current snapshot. It keeps the current data if the download
 fails and checks again after five minutes. An expired snapshot is never used
-for a date outside its validity window. The station catalogue is updated with
+for a date outside its validity window. Snapshot downloads use manual redirect
+handling, which Cloudflare Workers supports, and reject redirect responses.
+The station catalogue is updated with
 the snapshot. Changes to the application code still require a Sites release.
 Supplying `PLK_API_KEY` uses the official live timetable API first.
 

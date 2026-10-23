@@ -30,7 +30,11 @@ test("runtime snapshot refresh caches a validated response", async t => {
 test("a deployed expired snapshot is replaced without a new build", async t => {
   const { currentSnapshot } = await import("../app/lib/snapshot-source.ts?expired");
   const expired = { ...bundled, generatedAt: "2026-07-27T02:45:10Z", validFrom: "2026-07-25", validThrough: "2026-08-26" };
-  t.mock.method(globalThis, "fetch", async () => Response.json(bundled));
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    if (options.redirect === "error") throw new TypeError("Workers does not support redirect: error");
+    assert.equal(options.redirect, "manual");
+    return Response.json(bundled);
+  });
   const result = await currentSnapshot(expired);
   assert.equal(result.validThrough, bundled.validThrough);
   assert.deepEqual(result.trips, bundled.trips);
@@ -40,5 +44,17 @@ test("an older remote snapshot cannot replace current timetable data", async t =
   const { currentSnapshot } = await import("../app/lib/snapshot-source.ts?older");
   t.mock.method(globalThis, "fetch", async () => Response.json({ ...bundled, generatedAt: "2026-07-27T02:45:10Z" }));
   assert.equal(await currentSnapshot(bundled), bundled);
+});
+
+test("runtime snapshot refresh rejects redirects without following the target", async t => {
+  const { currentSnapshot } = await import("../app/lib/snapshot-source.ts?redirect");
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    calls++;
+    assert.equal(options.redirect, "manual");
+    return new Response(null, { status: 302, headers: { Location: "https://example.com/other.json" } });
+  });
+  assert.equal(await currentSnapshot(bundled), bundled);
+  assert.equal(calls, 1);
 });
 
