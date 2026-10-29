@@ -4,9 +4,9 @@
     "sourceUrl": "https://www.plk-sa.pl/klienci-i-kontrahenci/api-otwarte-dane",
     "feedName": "Polish Trains GTFS by Mikołaj Kuranowski",
     "feedUrl": "https://mkuran.pl/gtfs/polish_trains.zip",
-    "sourceGeneratedAt": "2026-10-28 02:45:19",
-    "retrievedAt": "2026-10-28T09:37:09.303Z",
-    "processedAt": "2026-10-29T00:53:48.482Z",
+    "sourceGeneratedAt": "2026-10-29 02:45:37",
+    "retrievedAt": "2026-10-29T09:54:43.869Z",
+    "processedAt": "2026-10-29T09:54:45.244Z",
     "reuseTermsUrl": "https://bip.plk-sa.pl/ponowne-wykorzystywanie"
   },
   "eicStationMapping": {
