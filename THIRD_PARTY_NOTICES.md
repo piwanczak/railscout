@@ -16,9 +16,9 @@ Exact source: PKP Polskie Linie Kolejowe S.A. timetable data distributed in the
 [Polish Trains GTFS feed](https://mkuran.pl/gtfs/polish_trains.zip) prepared by
 Mikołaj Kuranowski.
 
-- Source generation time reported by the feed: `2026-10-29 02:45:37`
-- Acquisition time: `2026-10-29T09:54:43.869Z`
-- Processing time: `2026-10-30T00:57:54.781Z`
+- Source generation time reported by the feed: `2026-10-30 02:45:15`
+- Acquisition time: `2026-10-30T09:57:43.218Z`
+- Processing time: `2026-10-30T09:57:44.604Z`
 - Processing performed by RailScout: PKP Intercity trips and their service
   dates, stops, platforms, and tracks were selected and converted into compact
   JSON; no claim is made that PKP PLK or the GTFS maintainer approved the
