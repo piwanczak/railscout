@@ -18,7 +18,7 @@ Mikołaj Kuranowski.
 
 - Source generation time reported by the feed: `2026-11-12 02:45:14`
 - Acquisition time: `2026-11-12T11:01:13.502Z`
-- Processing time: `2026-11-15T20:24:09.925Z`
+- Processing time: `2026-11-16T01:00:41.679Z`
 - Processing performed by RailScout: PKP Intercity trips and their service
   dates, stops, platforms, and tracks were selected and converted into compact
   JSON; no claim is made that PKP PLK or the GTFS maintainer approved the
